@@ -1,0 +1,40 @@
+TradingAgents A-Share License
+
+This project is a derivative work based on:
+- Original Project: TauricResearch/TradingAgents (Apache License 2.0)
+  https://github.com/TauricResearch/TradingAgents
+
+-------------------------------------------------------------------------------
+1. MODIFICATIONS & ADDITIONS
+-------------------------------------------------------------------------------
+The following components have been significantly modified or added by the 
+KylinMountain/TradingAgents-AShare team:
+
+- api/: Complete backend API layer (New)
+- tradingagents/: Core multi-agent logic, dataflows, and graph architecture (Modified)
+- frontend/: Full web-based dashboard (New)
+
+The original CLI components have been removed in this version.
+
+-------------------------------------------------------------------------------
+2. LICENSING TERMS
+-------------------------------------------------------------------------------
+- The core logic derived from the original project remains under the 
+  Apache License 2.0.
+- All NEW components (including api/ and frontend/) and SIGNIFICANT 
+  MODIFICATIONS to tradingagents/ are licensed under the:
+  
+  PolyForm Noncommercial License 1.0.0
+  
+  Specifically: You may use, modify, and distribute this software for 
+  NON-COMMERCIAL purposes only. Commercial use requires explicit permission 
+  from the authors.
+
+-------------------------------------------------------------------------------
+3. FULL LICENSE TEXTS
+-------------------------------------------------------------------------------
+For the full text of the licenses, please refer to the following:
+- Apache 2.0: https://www.apache.org/licenses/LICENSE-2.0
+- PolyForm Noncommercial 1.0.0: https://polyformproject.org/licenses/noncommercial/1.0.0
+
+Copyright (c) 2026 KylinMountain / TradingAgents-AShare Team
