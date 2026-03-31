@@ -111,7 +111,7 @@ export default function TrackingBoardPanel() {
                         <h2 className="text-lg font-semibold text-slate-900 dark:text-slate-100">QMT 跟踪看板</h2>
                     </div>
                     <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
-                        最新价优先使用 QMT / xtquant；简洁版为白底，含当日 K 线与成本价标记。
+                        最新价优先使用 QMT / xtquant，简洁版聚焦展示当日 K 线与成本价标记。
                     </p>
                 </div>
 

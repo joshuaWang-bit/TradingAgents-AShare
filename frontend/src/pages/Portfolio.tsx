@@ -453,17 +453,17 @@ export default function Portfolio() {
         <div className="space-y-6">
             <div>
                 <h1 className="text-2xl font-bold text-slate-900 dark:text-slate-100">自选 & 定时分析</h1>
-                <p className="text-slate-500 dark:text-slate-400 mt-1">管理关注标的，使用 QMT 持仓上下文，并开启每日定时自动分析</p>
+                <p className="text-slate-500 dark:text-slate-400 mt-1">先同步 QMT 持仓，再为关注标的创建每日自动分析任务</p>
             </div>
 
             <div className="grid grid-cols-1 gap-6">
                 <div className="card space-y-4">
                     <div className="flex items-center gap-2">
                         <Database className="w-5 h-5 text-emerald-500" />
-                        <h2 className="font-semibold text-slate-900 dark:text-slate-100">QMT / xtquant 持仓同步</h2>
+                        <h2 className="font-semibold text-slate-900 dark:text-slate-100">1. 一键同步 QMT 持仓</h2>
                     </div>
                     <p className="text-sm text-slate-500 dark:text-slate-400">
-                        QMT 同步入口已经移动到设置页。这里保留当前同步状态，方便你在批量导入页面确认是否已经配置完成。
+                        QMT 同步入口已经移动到设置页。这里保留当前同步状态，方便确认持仓是否已经导入成功。
                     </p>
                     <div className="rounded-2xl border border-slate-200 dark:border-slate-700 bg-slate-50/80 dark:bg-slate-900/40 p-4 space-y-3">
                         <div>
@@ -663,7 +663,7 @@ export default function Portfolio() {
                 <div className="card">
                     <div className="flex items-center gap-2 mb-4">
                         <Clock className="w-5 h-5 text-emerald-500" />
-                        <h2 className="font-semibold text-slate-900 dark:text-slate-100">定时分析 ({scheduled.length}/10)</h2>
+                        <h2 className="font-semibold text-slate-900 dark:text-slate-100">2. 创建定时分析 ({scheduled.length}/10)</h2>
                     </div>
                     <p className="text-xs text-slate-400 mb-4">每个交易日在设定时间自动执行（允许 20:00~次日 08:00）</p>
 
