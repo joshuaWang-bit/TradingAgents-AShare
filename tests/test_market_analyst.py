@@ -50,7 +50,7 @@ def test_market_analyst_returns_trace():
     assert result["analyst_traces"][0]["horizon"] == "short"
 
 
-def test_market_analyst_medium_window():
+def test_market_analyst_uses_short_window_for_medium_request():
     mock_llm = MagicMock()
 
     async def _astream(_messages):
@@ -61,4 +61,5 @@ def test_market_analyst_medium_window():
     collector._cache["600519_2026-03-12"] = _stub_pool("medium")
     node = create_market_analyst(mock_llm, collector)
     result = asyncio.run(node(_make_state("medium")))
-    assert result["analyst_traces"][0]["data_window"] == "90天"
+    assert result["analyst_traces"][0]["horizon"] == "short"
+    assert result["analyst_traces"][0]["data_window"] == "14天"

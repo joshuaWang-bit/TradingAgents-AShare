@@ -133,7 +133,7 @@ class TestPropagateAsync:
             "smart_money_report": "",
         }
 
-    def test_dual_results_returned(self):
+    def test_returns_short_term_result_and_reserved_medium_slot(self):
         self.ta.graph.ainvoke = AsyncMock(
             side_effect=lambda state, **kw: self._fake_state(state["horizon"])
         )
@@ -145,7 +145,7 @@ class TestPropagateAsync:
         assert "short_term" in result
         assert "medium_term" in result
         assert result["short_term"]["horizon"] == "short"
-        assert result["medium_term"]["horizon"] == "medium"
+        assert result["medium_term"] is None
         assert result["user_intent"]["ticker"] == "600519"
 
     def test_data_collected_and_evicted(self):

@@ -64,7 +64,9 @@ export default function Settings() {
 
     const [configLoading, setConfigLoading] = useState(false)
     const [saving, setSaving] = useState(false)
+    const [warmingUp, setWarmingUp] = useState(false)
     const [saved, setSaved] = useState(false)
+    const [saveMessage, setSaveMessage] = useState('设置已保存')
     const [configError, setConfigError] = useState<string | null>(null)
     const [warmupResults, setWarmupResults] = useState<RuntimeWarmupResult[]>([])
     const [warmupError, setWarmupError] = useState<string | null>(null)

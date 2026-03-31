@@ -555,6 +555,7 @@ export interface RuntimeConfigUpdateResponse {
     applied: RuntimeConfigUpdate
     has_api_key: boolean
     current: RuntimeConfig
+    warmup?: RuntimeConfigWarmup
 }
 
 export interface RuntimeConfigUpdate {

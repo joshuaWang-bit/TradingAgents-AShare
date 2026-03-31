@@ -811,6 +811,8 @@ class UserRuntimeConfigUpdateRequest(BaseModel):
     email_report_enabled: Optional[bool] = None
     api_key: Optional[str] = None
     clear_api_key: bool = False
+    warmup: bool = True
+    force_warmup: bool = False
 
 
 class UserRuntimeWarmupRequest(UserRuntimeConfigUpdateRequest):
@@ -3474,10 +3476,19 @@ def get_runtime_config(
 @app.patch("/v1/config")
 def update_runtime_config(
     updates: UserRuntimeConfigUpdateRequest,
+    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
     current_user: UserDB = Depends(_require_web_user),
 ):
     """更新当前用户运行时配置，下次分析时生效。"""
+    before_cfg = _config_response_for_user(current_user, db)
+    pending_cfg = _build_pending_runtime_config(updates, current_user.id, db)
+    if _should_probe_runtime_config(before_cfg, pending_cfg, updates):
+        probe = _probe_runtime_config(pending_cfg)
+        _log(
+            f"[LLM Probe] user={current_user.id} provider={pending_cfg.get('llm_provider')} "
+            f"model={probe.get('model', '')} status={probe.get('status')}"
+        )
     row = auth_service.upsert_user_llm_config(
         db,
         current_user.id,
@@ -3493,18 +3504,52 @@ def update_runtime_config(
     if updates.email_report_enabled is not None:
         current_user.email_report_enabled = updates.email_report_enabled
         db.commit()
+    current_cfg = _config_response_for_user(current_user, db)
+    warmup_models = _warmup_model_names(current_cfg.model_dump())
+    should_warmup = _should_trigger_config_warmup(before_cfg, current_cfg, updates)
+    warmup_payload: Dict[str, Any]
+    if should_warmup and warmup_models:
+        warmup_payload = {
+            "requested": True,
+            "triggered": True,
+            "status": "scheduled",
+            "models": warmup_models,
+            "message": f"模型配置已保存，后台正在预热 {len(warmup_models)} 个模型。",
+        }
+        background_tasks.add_task(
+            _run_config_warmup,
+            _build_runtime_config({}, user_id=current_user.id, db=db),
+            current_user.id,
+        )
+    elif updates.warmup:
+        warmup_payload = {
+            "requested": True,
+            "triggered": False,
+            "status": "skipped",
+            "models": warmup_models,
+            "message": "模型配置已保存，本次未触发 warmup。",
+        }
+    else:
+        warmup_payload = {
+            "requested": False,
+            "triggered": False,
+            "status": "disabled",
+            "models": [],
+            "message": "模型配置已保存。",
+        }
     filtered = {
         k: v
         for k, v in updates.model_dump().items()
         if v is not None
-        and k != "api_key"
+        and k not in {"api_key", "warmup", "force_warmup"}
         and (k in _CONFIG_ALLOWED_KEYS or (k == "clear_api_key" and bool(v)))
     }
     return {
         "message": "用户配置已更新",
         "applied": filtered,
         "has_api_key": bool(row.api_key_encrypted),
-        "current": _config_response_for_user(current_user, db),
+        "current": current_cfg,
+        "warmup": warmup_payload,
     }
 
 
