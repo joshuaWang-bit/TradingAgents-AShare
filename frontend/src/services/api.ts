@@ -44,7 +44,22 @@ class ApiService {
             throw new Error(error || `HTTP error! status: ${response.status}`)
         }
 
-        return response.json()
+        if (response.status === 204 || response.status === 205) {
+            return undefined as T
+        }
+
+        const contentType = response.headers.get('content-type') || ''
+        if (!contentType.includes('application/json')) {
+            const text = await response.text()
+            return (text ? (text as T) : undefined) as T
+        }
+
+        const raw = await response.text()
+        if (!raw) {
+            return undefined as T
+        }
+
+        return JSON.parse(raw) as T
     }
 
     async startAnalysis(request: AnalysisRequest): Promise<AnalysisResponse> {

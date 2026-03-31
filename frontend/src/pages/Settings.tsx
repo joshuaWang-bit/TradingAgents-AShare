@@ -64,6 +64,8 @@ export default function Settings() {
 
     const [configLoading, setConfigLoading] = useState(false)
     const [saving, setSaving] = useState(false)
+    const [modelSaving, setModelSaving] = useState(false)
+    const [saveAllSaving, setSaveAllSaving] = useState(false)
     const [warmingUp, setWarmingUp] = useState(false)
     const [saved, setSaved] = useState(false)
     const [saveMessage, setSaveMessage] = useState('设置已保存')
@@ -203,7 +205,7 @@ export default function Settings() {
         localStorage.setItem('ta-custom-prompt', customPrompt)
     }
 
-    const buildRuntimeConfigPayload = () => ({
+    const buildRuntimeConfigPayload = (options?: { includeEmail?: boolean }) => ({
         llm_provider: effectiveProvider,
         backend_url: effectiveBaseUrl || undefined,
         deep_think_llm: deepThinkLlm,
@@ -211,33 +213,79 @@ export default function Settings() {
         max_debate_rounds: maxDebateRounds,
         max_risk_discuss_rounds: maxRiskRounds,
         api_key: llmApiKey || undefined,
-        email_report_enabled: emailReportEnabled,
+        ...(options?.includeEmail ? { email_report_enabled: emailReportEnabled } : {}),
     })
 
-    const submitConfig = async (options?: { forceWarmup?: boolean; successMessage?: string }) => {
+    const showSavedMessage = (message: string) => {
+        setSaveMessage(message)
+        setSaved(true)
+        setTimeout(() => setSaved(false), 2000)
+    }
+
+    const hasAnyQmtInput = () => Boolean(qmtPath.trim() || qmtAccountId.trim())
+    const shouldSyncQmt = () => Boolean(qmtPath.trim() && qmtAccountId.trim())
+
+    const syncQmtImport = async (options?: { successMessage?: string }) => {
+        if (!qmtPath.trim() || !qmtAccountId.trim()) {
+            throw new Error('请填写 QMT userdata 路径和资金账号')
+        }
+        setQmtSyncing(true)
+        try {
+            const result = await api.syncQmtImport({
+                qmt_path: qmtPath.trim(),
+                account_id: qmtAccountId.trim(),
+                account_type: qmtAccountType,
+                auto_apply_scheduled: qmtAutoApply,
+            })
+            setQmtImportState(result)
+            showSavedMessage(options?.successMessage || 'QMT 配置已保存')
+            return result
+        } finally {
+            setQmtSyncing(false)
+        }
+    }
+
+    const submitConfig = async (options?: { forceWarmup?: boolean; successMessage?: string; includeEmail?: boolean }) => {
         persistLocalSettings()
-        const { forceWarmup = false, successMessage = '设置已保存' } = options || {}
+        const { forceWarmup = false, successMessage = '设置已保存', includeEmail = true } = options || {}
         const response = await api.updateConfig({
-            ...buildRuntimeConfigPayload(),
+            ...buildRuntimeConfigPayload({ includeEmail }),
             warmup: true,
             force_warmup: forceWarmup,
         })
         setHasStoredApiKey(!!response.has_api_key)
         setLlmApiKey('')
-        setSaveMessage(response.warmup?.message || successMessage)
-        setSaved(true)
-        setTimeout(() => setSaved(false), 2000)
+        showSavedMessage(response.warmup?.message || successMessage)
         return response
     }
 
-    const handleSave = async () => {
-        setSaving(true)
+    const handleSaveModel = async () => {
+        setModelSaving(true)
         try {
-            await submitConfig()
+            await submitConfig({ includeEmail: false, successMessage: '模型配置已保存' })
         } catch (err) {
-            alert(err instanceof Error ? err.message : '保存配置失败')
+            alert(err instanceof Error ? err.message : '保存模型配置失败')
         } finally {
-            setSaving(false)
+            setModelSaving(false)
+        }
+    }
+
+    const handleSaveAll = async () => {
+        setSaveAllSaving(true)
+        try {
+            if (hasAnyQmtInput() && !shouldSyncQmt()) {
+                throw new Error('如需一并保存 QMT，请同时填写 QMT userdata 路径和资金账号')
+            }
+            await submitConfig({ includeEmail: true, successMessage: '全部设置已保存' })
+            if (shouldSyncQmt()) {
+                await syncQmtImport({ successMessage: '全部设置已保存' })
+            } else {
+                showSavedMessage('全部设置已保存')
+            }
+        } catch (err) {
+            alert(err instanceof Error ? err.message : '保存全部设置失败')
+        } finally {
+            setSaveAllSaving(false)
         }
     }
 
@@ -273,24 +321,11 @@ export default function Settings() {
         }
     }
 
-    const syncQmtImport = async () => {
-        if (!qmtPath.trim() || !qmtAccountId.trim()) {
-            alert('请填写 QMT userdata 路径和资金账号')
-            return
-        }
-        setQmtSyncing(true)
+    const handleSaveQmt = async () => {
         try {
-            const result = await api.syncQmtImport({
-                qmt_path: qmtPath.trim(),
-                account_id: qmtAccountId.trim(),
-                account_type: qmtAccountType,
-                auto_apply_scheduled: qmtAutoApply,
-            })
-            setQmtImportState(result)
+            await syncQmtImport({ successMessage: 'QMT 配置已保存' })
         } catch (err) {
             alert(err instanceof Error ? err.message : 'QMT 同步失败')
-        } finally {
-            setQmtSyncing(false)
         }
     }
 
@@ -356,7 +391,18 @@ export default function Settings() {
                             </div>
                         </div>
                     </div>
-                    {(qmtLoading || qmtSyncing) && <Loader2 className="w-4 h-4 animate-spin text-slate-400 ml-auto" />}
+                    <div className="ml-auto flex items-center gap-3">
+                        {(qmtLoading || qmtSyncing) && <Loader2 className="w-4 h-4 animate-spin text-slate-400" />}
+                        <button
+                            type="button"
+                            onClick={handleSaveQmt}
+                            disabled={qmtSyncing || qmtLoading || saveAllSaving}
+                            className="btn-secondary inline-flex items-center gap-2"
+                        >
+                            {qmtSyncing ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
+                            保存
+                        </button>
+                    </div>
                 </div>
                 <p className="text-sm text-slate-500 dark:text-slate-400">
                     在这里连接 QMT 的 `xtquant` 账户。同步成功后，主页面跟踪看板和定时分析会自动使用这里的最新持仓信息。
@@ -396,7 +442,7 @@ export default function Settings() {
                 </label>
 
                 <div className="flex flex-wrap gap-3">
-                    <button type="button" onClick={syncQmtImport} disabled={qmtSyncing} className="btn-primary inline-flex items-center gap-2">
+                    <button type="button" onClick={() => { void syncQmtImport() }} disabled={qmtSyncing || saveAllSaving} className="btn-primary inline-flex items-center gap-2">
                         {qmtSyncing ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
                         连接并同步
                     </button>
@@ -443,7 +489,18 @@ export default function Settings() {
                 <div className="flex items-center gap-2">
                     <Database className="w-5 h-5 text-purple-500" />
                     <h2 className="text-lg font-semibold text-slate-900 dark:text-slate-100">模型接入</h2>
-                    {configLoading && <Loader2 className="w-4 h-4 animate-spin text-slate-400 ml-auto" />}
+                    <div className="ml-auto flex items-center gap-3">
+                        {configLoading && <Loader2 className="w-4 h-4 animate-spin text-slate-400" />}
+                        <button
+                            type="button"
+                            onClick={handleSaveModel}
+                            disabled={configLoading || modelSaving || saveAllSaving}
+                            className="btn-secondary inline-flex items-center gap-2"
+                        >
+                            {modelSaving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
+                            保存
+                        </button>
+                    </div>
                 </div>
 
                 {configError && (
@@ -553,7 +610,7 @@ export default function Settings() {
                                 <button
                                     type="button"
                                     onClick={handleClearApiKey}
-                                    disabled={saving}
+                                    disabled={saving || modelSaving || saveAllSaving}
                                     className="inline-flex items-center gap-1 text-xs text-rose-500 hover:text-rose-600 disabled:opacity-50"
                                 >
                                     <Trash2 className="w-3.5 h-3.5" />
@@ -604,7 +661,7 @@ export default function Settings() {
                                     使用当前表单配置向模型发送“你好”，不会自动保存设置。
                                 </p>
                             </div>
-                            <button onClick={handleWarmup} disabled={saving || warmingUp || configLoading} className="btn-secondary inline-flex items-center gap-2">
+                            <button onClick={handleWarmup} disabled={saving || modelSaving || saveAllSaving || warmingUp || configLoading} className="btn-secondary inline-flex items-center gap-2">
                                 {warmingUp ? <Loader2 className="w-4 h-4 animate-spin" /> : <Flame className="w-4 h-4" />}
                                 {warmingUp ? '测试中...' : '立即 Warmup'}
                             </button>
@@ -816,9 +873,9 @@ export default function Settings() {
             </div>
 
             <div className="flex items-center gap-4">
-                <button onClick={handleSave} disabled={saving} className="btn-primary inline-flex items-center gap-2">
-                    {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
-                    保存设置
+                <button onClick={handleSaveAll} disabled={saveAllSaving || modelSaving || qmtSyncing} className="btn-primary inline-flex items-center gap-2">
+                    {saveAllSaving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
+                    保存全部
                 </button>
                 {saved && <span className="text-sm text-green-600 dark:text-green-400">✓ {saveMessage}</span>}
             </div>
