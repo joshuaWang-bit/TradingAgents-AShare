@@ -192,6 +192,42 @@ class TestQmtImportService:
         assert request.average_cost == pytest.approx(1700.0)
         assert "QMT / xtquant" in (request.user_notes or "")
 
+    def test_scheduled_job_marks_failed_when_underlying_job_fails(self, db):
+        from api.main import _run_scheduled_job, _set_job
+
+        item = scheduled_service.create_scheduled(db, "user-failed", "300750.SZ", "short")
+
+        class FakeDbCtx:
+            def __enter__(self):
+                return db
+
+            def __exit__(self, exc_type, exc_val, exc_tb):
+                if exc_type is not None:
+                    db.rollback()
+
+        async def fake_run_job(job_id, request, *args, **kwargs):
+            _set_job(job_id, status="failed", error="ModuleNotFoundError: missing module")
+
+        with patch("api.main._run_job", side_effect=fake_run_job), patch(
+            "api.main.get_db_ctx",
+            return_value=FakeDbCtx(),
+        ), patch("tradingagents.dataflows.trade_calendar.is_cn_trading_day", return_value=True):
+            asyncio.run(
+                _run_scheduled_job(
+                    {
+                        "id": item["id"],
+                        "user_id": "user-failed",
+                        "symbol": "300750.SZ",
+                        "horizon": "short",
+                    },
+                    "2026-03-30",
+                )
+            )
+
+        scheduled = scheduled_service.get_scheduled(db, "user-failed", item["id"])
+        assert scheduled["last_run_status"] == "failed"
+        assert scheduled["consecutive_failures"] == 1
+
 
 class TestQmtImportApi:
     def test_sync_endpoint_reads_qmt_positions(self, fake_xtquant_modules):

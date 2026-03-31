@@ -251,7 +251,9 @@ async def _run_scheduled_analysis_once(
             )
 
         await _run_job(job_id, req, False, True, user_id, "scheduled" if mark_schedule_run else "scheduled_manual")
-
+        job_state = _get_job(job_id)
+        if job_state.get("status") == "failed":
+            raise RuntimeError(job_state.get("error") or f"scheduled analysis job {job_id} failed")
         with get_db_ctx() as db:
             if mark_schedule_run:
                 scheduled_service.mark_run_success(db, task_id, requested_trade_date, job_id)
@@ -1024,6 +1026,11 @@ def _set_job(job_key: str, **kwargs) -> None:
         if job_key not in _jobs:
             _jobs[job_key] = {}
         _jobs[job_key].update(kwargs)
+
+
+def _get_job(job_key: str) -> Dict[str, Any]:
+    with _jobs_lock:
+        return dict(_jobs.get(job_key, {}))
 
 
 def _ensure_job_event_queue(job_id: str) -> "asyncio.Queue[Dict[str, Any]]":

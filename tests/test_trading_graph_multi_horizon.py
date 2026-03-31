@@ -226,7 +226,6 @@ def test_graph_setup_wires_market_analyst_without_name_errors():
         "create_bull_researcher": MagicMock(return_value="bull_node"),
         "create_conservative_debator": MagicMock(return_value="conservative_node"),
         "create_fundamentals_analyst": MagicMock(return_value="fundamentals_node"),
-        "create_game_theory_manager": MagicMock(return_value="game_node"),
         "create_macro_analyst": MagicMock(return_value="macro_node"),
         "create_market_analyst": create_market,
         "create_neutral_debator": MagicMock(return_value="neutral_node"),

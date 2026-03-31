@@ -25,7 +25,6 @@ def _load_agent_factories() -> dict[str, Any]:
     from tradingagents.agents.analysts.news_analyst import create_news_analyst
     from tradingagents.agents.analysts.smart_money_analyst import create_smart_money_analyst
     from tradingagents.agents.analysts.social_media_analyst import create_social_media_analyst
-    from tradingagents.agents.managers.game_theory_manager import create_game_theory_manager
     from tradingagents.agents.managers.research_manager import create_research_manager
     from tradingagents.agents.managers.risk_manager import create_risk_manager
     from tradingagents.agents.researchers.bear_researcher import create_bear_researcher
@@ -41,7 +40,6 @@ def _load_agent_factories() -> dict[str, Any]:
         "create_bull_researcher": create_bull_researcher,
         "create_conservative_debator": create_conservative_debator,
         "create_fundamentals_analyst": create_fundamentals_analyst,
-        "create_game_theory_manager": create_game_theory_manager,
         "create_macro_analyst": create_macro_analyst,
         "create_market_analyst": create_market_analyst,
         "create_neutral_debator": create_neutral_debator,
