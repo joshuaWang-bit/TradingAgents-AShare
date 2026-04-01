@@ -102,9 +102,11 @@ def sync_qmt_portfolio(
         scheduled_sync = {"created": [], "existing": [], "skipped_limit": []}
         if auto_apply_scheduled:
             ordered_symbols = [
-                _normalize_qmt_code(getattr(item, "stock_code", None))
+                symbol
                 for item in positions
                 if (_to_float(getattr(item, "volume", None)) or 0) > 0
+                for symbol in [_normalize_qmt_code(getattr(item, "stock_code", None))]
+                if symbol is not None
             ]
             scheduled_sync = scheduled_service.ensure_scheduled_for_symbols(
                 db=db,
