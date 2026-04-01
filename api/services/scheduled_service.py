@@ -200,7 +200,7 @@ def ensure_scheduled_for_symbols(
         remaining_slots -= 1
 
     if created:
-        db.commit()
+        db.flush()
 
     return {
         "created": created,

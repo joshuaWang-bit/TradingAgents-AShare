@@ -309,10 +309,16 @@ async def _send_scheduled_report_notifications(user_id: str, report_id: str, sym
                     email_user = user
         if email_user and report_to_send:
             _log(f"[Scheduler] Sending email report for {symbol} to {email_user.email}")
-            asyncio.create_task(send_report_email_with_retry(email_user, report_to_send))
+            _create_tracked_task(
+                send_report_email_with_retry(email_user, report_to_send),
+                label=f"Email notification task ({symbol})",
+            )
         if report_to_send and webhook_url and wecom_report_enabled:
             _log(f"[Scheduler] Sending WeCom report for {symbol}")
-            asyncio.create_task(send_report_message_with_retry(report_to_send, webhook_url))
+            _create_tracked_task(
+                send_report_message_with_retry(report_to_send, webhook_url),
+                label=f"WeCom notification task ({symbol})",
+            )
     except Exception as e:
         logger.warning(f"[Scheduler] Notification send failed for {symbol}: {e}")
 
@@ -500,6 +506,7 @@ _background_tasks: set = set()
 
 # ── A-share stock name → code cache ──────────────────────────────────────────
 _cn_stock_map: Optional[Dict[str, str]] = None  # name -> "XXXXXX.SH/SZ"
+_cn_stock_reverse_map: Optional[Dict[str, str]] = None  # code -> name
 _cn_stock_map_lock = Lock()
 
 
@@ -507,7 +514,7 @@ def _utcnow_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def _create_tracked_task(coro) -> asyncio.Task:
+def _create_tracked_task(coro, *, label: str = "Background task") -> asyncio.Task:
     """Create an asyncio task and keep a reference to prevent GC.
     Also logs unhandled exceptions via a done callback."""
     task = asyncio.create_task(coro)
@@ -516,7 +523,7 @@ def _create_tracked_task(coro) -> asyncio.Task:
     def _on_done(t: asyncio.Task):
         _background_tasks.discard(t)
         if not t.cancelled() and t.exception():
-            logger.error("Background task failed: %s", t.exception())
+            logger.error("%s failed: %s", label, t.exception())
 
     task.add_done_callback(_on_done)
     return task
@@ -543,11 +550,12 @@ _STOCK_MAP_TTL = 7 * 86400  # 7 days
 
 def _load_cn_stock_map() -> Dict[str, str]:
     """Lazy-load and cache akshare A-share name→code mapping with 7-day TTL."""
-    global _cn_stock_map, _cn_stock_map_loaded_at
+    global _cn_stock_map, _cn_stock_reverse_map, _cn_stock_map_loaded_at
     import time as _time
     now = _time.time()
     if _cn_stock_map is not None and (now - _cn_stock_map_loaded_at) > _STOCK_MAP_TTL:
         _cn_stock_map = None  # expire cache
+        _cn_stock_reverse_map = None
     if _cn_stock_map is not None:
         return _cn_stock_map
     with _cn_stock_map_lock:
@@ -564,19 +572,21 @@ def _load_cn_stock_map() -> Dict[str, str]:
                     normalized = _normalize_symbol(code)
                     result[name] = normalized
             _cn_stock_map = result
+            _cn_stock_reverse_map = {code: name for name, code in result.items()}
             _cn_stock_map_loaded_at = now
             _log(f"[StockMap] Loaded {len(result)} A-share stocks.")
         except Exception as e:
             _log(f"[StockMap] Failed to load: {e}")
             if _cn_stock_map is None:
                 _cn_stock_map = {}
+                _cn_stock_reverse_map = {}
     return _cn_stock_map
 
 
 def _get_reverse_stock_map() -> Dict[str, str]:
     """Return code→name mapping."""
-    name_to_code = _load_cn_stock_map()
-    return {v: k for k, v in name_to_code.items()}
+    _load_cn_stock_map()
+    return dict(_cn_stock_reverse_map or {})
 
 
 def _get_reverse_stock_map_cached_only() -> Dict[str, str]:
@@ -586,9 +596,9 @@ def _get_reverse_stock_map_cached_only() -> Dict[str, str]:
     When the cache is cold we simply return an empty mapping and let the UI fall back
     to stock codes. Search endpoints can still call _load_cn_stock_map() explicitly.
     """
-    if _cn_stock_map is None:
+    if _cn_stock_map is None or _cn_stock_reverse_map is None:
         return {}
-    return {v: k for k, v in _cn_stock_map.items()}
+    return dict(_cn_stock_reverse_map)
 
 
 def _search_cn_stock_by_name(query: str) -> Optional[str]:
@@ -3704,6 +3714,14 @@ def update_runtime_config(
     current_user: UserDB = Depends(_require_web_user),
 ):
     """更新当前用户运行时配置，下次分析时生效。"""
+    normalized_wecom_webhook = None
+    if updates.wecom_webhook_url:
+        from api.services.wecom_notification_service import normalize_webhook_url
+
+        try:
+            normalized_wecom_webhook = normalize_webhook_url(updates.wecom_webhook_url)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
     persistent_user = db.query(UserDB).filter(UserDB.id == current_user.id).first() or current_user
     before_cfg = _config_response_for_user(persistent_user, db)
     pending_cfg = _build_pending_runtime_config(updates, persistent_user.id, db)
@@ -3723,7 +3741,7 @@ def update_runtime_config(
         max_debate_rounds=updates.max_debate_rounds,
         max_risk_discuss_rounds=updates.max_risk_discuss_rounds,
         api_key=updates.api_key,
-        wecom_webhook_url=updates.wecom_webhook_url,
+        wecom_webhook_url=normalized_wecom_webhook,
         clear_api_key=updates.clear_api_key,
         clear_wecom_webhook=updates.clear_wecom_webhook,
     )
@@ -3810,7 +3828,7 @@ async def warmup_wecom_webhook(
     db: Session = Depends(get_db),
     current_user: UserDB = Depends(_require_web_user),
 ):
-    from api.services.wecom_notification_service import build_test_message, send_message
+    from api.services.wecom_notification_service import build_test_message, normalize_webhook_url, send_message
 
     webhook_url = (request.wecom_webhook_url or "").strip()
     if not webhook_url:
@@ -3818,6 +3836,10 @@ async def warmup_wecom_webhook(
         webhook_url = auth_service.decrypt_secret(getattr(user_cfg, "wecom_webhook_encrypted", None)) or ""
     if not webhook_url:
         raise HTTPException(status_code=400, detail="请先填写或保存企业微信 Webhook")
+    try:
+        webhook_url = normalize_webhook_url(webhook_url)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     try:
         sent = await asyncio.to_thread(send_message, build_test_message(request.content), webhook_url)

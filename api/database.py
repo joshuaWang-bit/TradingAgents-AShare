@@ -1,5 +1,6 @@
 """Database configuration and session management."""
 
+import logging
 import os
 from datetime import datetime, timezone
 from typing import Generator
@@ -53,6 +54,7 @@ SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 # Base class for models
 Base = declarative_base()
+logger = logging.getLogger(__name__)
 
 
 def get_db() -> Generator[Session, None, None]:
@@ -113,7 +115,7 @@ def _ensure_report_schema() -> None:
             if "game_theory_report" not in columns:
                 conn.execute(text("ALTER TABLE reports ADD COLUMN game_theory_report TEXT"))
     except Exception as e:
-        print(f"Warning: Failed to ensure report schema: {e}")
+        logger.error("Failed to ensure report schema: %s", e)
 
 
 def _ensure_user_schema() -> None:
@@ -131,7 +133,7 @@ def _ensure_user_schema() -> None:
             if "wecom_webhook_encrypted" not in llm_columns:
                 conn.execute(text("ALTER TABLE user_llm_configs ADD COLUMN wecom_webhook_encrypted TEXT"))
     except Exception as e:
-        print(f"Warning: Failed to ensure user schema: {e}")
+        logger.error("Failed to ensure user schema: %s", e)
 
     _migrate_tokens_to_hashed()
     _migrate_api_keys_reencrypt()
@@ -160,9 +162,9 @@ def _migrate_tokens_to_hashed() -> None:
                     text("UPDATE user_tokens SET token = :hash, token_hint = :hint WHERE id = :id"),
                     {"hash": token_hash, "hint": hint, "id": row_id},
                 )
-            print(f"[security] Migrated {len(rows)} API tokens from plaintext to hashed storage.")
+            logger.info("[security] Migrated %s API tokens from plaintext to hashed storage.", len(rows))
     except Exception as e:
-        print(f"Warning: Token hash migration failed: {e}")
+        logger.error("Token hash migration failed: %s", e)
 
 
 def _migrate_api_keys_reencrypt() -> None:
@@ -209,21 +211,28 @@ def _migrate_api_keys_reencrypt() -> None:
                         continue
                     plaintext = decrypt_secret_with_fallback(encrypted_value)
                     if plaintext is None:
-                        print(
-                            f"[security] WARNING: Cannot decrypt {column_name} for user {user_id} "
-                            "with any known key. Skipping."
+                        logger.warning(
+                            "[security] Cannot decrypt %s for user %s with any known key. Skipping.",
+                            column_name,
+                            user_id,
                         )
                         continue
                     new_encrypted = encrypt_secret(plaintext)
-                    conn.execute(
-                        text(f"UPDATE user_llm_configs SET {column_name} = :enc WHERE user_id = :uid"),
-                        {"enc": new_encrypted, "uid": user_id},
-                    )
+                    if column_name == "api_key_encrypted":
+                        conn.execute(
+                            text("UPDATE user_llm_configs SET api_key_encrypted = :enc WHERE user_id = :uid"),
+                            {"enc": new_encrypted, "uid": user_id},
+                        )
+                    elif column_name == "wecom_webhook_encrypted":
+                        conn.execute(
+                            text("UPDATE user_llm_configs SET wecom_webhook_encrypted = :enc WHERE user_id = :uid"),
+                            {"enc": new_encrypted, "uid": user_id},
+                        )
                     migrated += 1
             if migrated:
-                print(f"[security] Re-encrypted {migrated} user secret(s) with new TA_APP_SECRET_KEY.")
+                logger.info("[security] Re-encrypted %s user secret(s) with new TA_APP_SECRET_KEY.", migrated)
     except Exception as e:
-        print(f"Warning: user secret re-encryption migration failed: {e}")
+        logger.error("User secret re-encryption migration failed: %s", e)
 
 
 # Report Model

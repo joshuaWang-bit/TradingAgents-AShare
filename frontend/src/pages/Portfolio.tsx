@@ -65,6 +65,7 @@ export default function Portfolio() {
     const [latestReports, setLatestReports] = useState<Record<string, Report>>({})
     const [qmtImportState, setQmtImportState] = useState<QmtImportState | null>(null)
     const [loading, setLoading] = useState(true)
+    const [loadError, setLoadError] = useState<string | null>(null)
     const [selectedScheduledIds, setSelectedScheduledIds] = useState<string[]>([])
     const [batchHorizon, setBatchHorizon] = useState<'short' | 'medium'>('short')
     const [batchTriggerTime, setBatchTriggerTime] = useState('20:00')
@@ -97,6 +98,7 @@ export default function Portfolio() {
 
     const fetchAll = async () => {
         setLoading(true)
+        setLoadError(null)
         try {
             const overview = await api.getPortfolioOverview()
             setWatchlist(overview.watchlist)
@@ -107,7 +109,10 @@ export default function Portfolio() {
                 reportMap[report.symbol] = report
             }
             setLatestReports(reportMap)
-        } catch {}
+        } catch (error) {
+            console.error('Failed to load portfolio overview:', error)
+            setLoadError(error instanceof Error ? error.message : '加载自选与定时分析数据失败')
+        }
         finally {
             setLoading(false)
         }
@@ -154,7 +159,10 @@ export default function Portfolio() {
                 const res = await api.searchStocks(trimmedQuery)
                 setSearchResults(res.results)
                 setShowDropdown(true)
-            } catch {}
+            } catch (error) {
+                console.error('Failed to search stocks:', error)
+                setShowDropdown(false)
+            }
             setSearchLoading(false)
         }, 300)
     }, [trimmedQuery, isBatchInput])
@@ -217,8 +225,11 @@ export default function Portfolio() {
     const removeFromWatchlist = async (id: string) => {
         try {
             await api.removeFromWatchlist(id)
-            fetchAll()
-        } catch {}
+            await fetchAll()
+        } catch (error) {
+            console.error('Failed to remove watchlist item:', error)
+            alert(error instanceof Error ? error.message : '移除自选失败')
+        }
     }
 
     const toggleScheduled = async (symbol: string, hasScheduled: boolean) => {
@@ -432,6 +443,11 @@ export default function Portfolio() {
 
     return (
         <div className="space-y-6">
+            {loadError && (
+                <div className="rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-600 dark:border-rose-900/50 dark:bg-rose-950/30 dark:text-rose-300">
+                    {loadError}
+                </div>
+            )}
             <div>
                 <h1 className="text-2xl font-bold text-slate-900 dark:text-slate-100">自选 & 定时分析</h1>
                 <p className="text-slate-500 dark:text-slate-400 mt-1">先同步 QMT 持仓，再为关注标的创建每日自动分析任务</p>

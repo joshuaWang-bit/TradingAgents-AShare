@@ -395,11 +395,22 @@ class TestWecomRuntimeConfig:
 
         assert r.status_code == 200
         assert mock_send.call_count == 1
-        assert mock_send.call_args.args[1] == "inline-key-1234"
+        assert mock_send.call_args.args[1] == (
+            "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=inline-key-1234"
+        )
 
         config_resp = self.client.get("/v1/config", headers=self.headers)
         assert config_resp.status_code == 200
         assert config_resp.json()["has_wecom_webhook"] is False
+
+    def test_invalid_wecom_url_is_rejected(self):
+        r = self.client.patch("/v1/config", headers=self.headers, json={
+            "wecom_webhook_url": "http://169.254.169.254/latest/meta-data/",
+            "warmup": False,
+        })
+
+        assert r.status_code == 400
+        assert "企业微信 Webhook" in r.json()["detail"]
 
 
 class TestWatchlistAddEndpoint:

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import importlib
+import logging
+from pathlib import Path, PurePath, PurePosixPath, PureWindowsPath
 from datetime import datetime, timezone
 from typing import Any
 from uuid import uuid4
@@ -13,6 +15,7 @@ from tradingagents.agents.utils.context_utils import normalize_user_context
 
 
 SOURCE_NAME = "qmt_xtquant"
+logger = logging.getLogger(__name__)
 
 
 def sync_qmt_portfolio(
@@ -25,6 +28,7 @@ def sync_qmt_portfolio(
 ) -> dict[str, Any]:
     """Query live holdings from QMT / xtquant and store them as the latest snapshot."""
 
+    qmt_path = _validate_qmt_path(qmt_path)
     trader_mod, xttype_mod = _load_xtquant_modules()
     xt_trader_cls = getattr(trader_mod, "XtQuantTrader", None)
     stock_account_cls = getattr(xttype_mod, "StockAccount", None)
@@ -118,8 +122,8 @@ def sync_qmt_portfolio(
         if trader is not None and hasattr(trader, "stop"):
             try:
                 trader.stop()
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.warning("[qmt] failed to stop trader cleanly: %s", exc)
 
 
 def get_import_state(
@@ -157,8 +161,8 @@ def list_imported_positions(db: Session, user_id: str) -> list[dict[str, Any]]:
             ImportedPortfolioPositionDB.source == SOURCE_NAME,
         )
         .order_by(
-            ImportedPortfolioPositionDB.market_value.desc().nullslast(),
-            ImportedPortfolioPositionDB.current_position.desc().nullslast(),
+            ImportedPortfolioPositionDB.market_value.desc(),
+            ImportedPortfolioPositionDB.current_position.desc(),
             ImportedPortfolioPositionDB.symbol,
         )
         .all()
@@ -228,6 +232,22 @@ def _load_xtquant_modules():
             "当前环境未安装 xtquant。请先在运行后端的 Python 环境安装 QMT 的 xtquant SDK。"
         ) from exc
     return trader_mod, xttype_mod
+
+
+def _validate_qmt_path(qmt_path: str) -> str:
+    normalized = str(qmt_path or "").strip()
+    if not normalized:
+        raise ValueError("QMT 路径不能为空")
+    if "\x00" in normalized:
+        raise ValueError("QMT 路径格式不正确")
+
+    pure_paths: tuple[PurePath, ...] = (PureWindowsPath(normalized), PurePosixPath(normalized))
+    if not any(path.is_absolute() for path in pure_paths):
+        raise ValueError("QMT 路径必须为绝对路径")
+    if any(part == ".." for path in pure_paths for part in path.parts):
+        raise ValueError("QMT 路径不能包含上级目录跳转")
+
+    return str(Path(normalized))
 
 
 def _normalize_qmt_code(value: Any) -> str | None:

@@ -144,6 +144,19 @@ class TestQmtImportService:
         by_symbol = {item["symbol"]: item for item in result["positions"]}
         assert by_symbol["600519.SH"]["trade_points_count"] == 0
 
+    def test_sync_qmt_portfolio_rejects_non_absolute_path(self, db, fake_xtquant_modules):
+        from api.services import qmt_import_service
+
+        with pytest.raises(ValueError, match="绝对路径"):
+            qmt_import_service.sync_qmt_portfolio(
+                db=db,
+                user_id="user-invalid-path",
+                qmt_path="../userdata_mini",
+                account_id="demo-account",
+                account_type="STOCK",
+                auto_apply_scheduled=True,
+            )
+
     def test_scheduled_job_uses_qmt_position_context(self, db, fake_xtquant_modules):
         from api.main import _run_scheduled_job
         from api.services import qmt_import_service

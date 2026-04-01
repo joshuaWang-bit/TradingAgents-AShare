@@ -5,6 +5,8 @@ import asyncio
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 
 def _make_report(**overrides):
     defaults = dict(
@@ -85,7 +87,29 @@ class TestSendMessage:
         response.json.return_value = {"errcode": 93000}
         mock_post.return_value = response
 
-        assert send_message("hello", "https://example.com/webhook") is False
+        assert send_message("hello", "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=abc123") is False
+
+    @patch("api.services.wecom_notification_service.requests.post")
+    def test_rejects_non_wecom_domain(self, mock_post):
+        from api.services.wecom_notification_service import send_message
+
+        with pytest.raises(ValueError):
+            send_message("hello", "https://example.com/webhook")
+
+        mock_post.assert_not_called()
+
+    @patch("api.services.wecom_notification_service.logger")
+    @patch("api.services.wecom_notification_service.requests.post")
+    def test_returns_false_for_non_json_response(self, mock_post, mock_logger):
+        from api.services.wecom_notification_service import send_message
+
+        response = MagicMock()
+        response.text = "<html>bad gateway</html>"
+        response.json.side_effect = ValueError("not json")
+        mock_post.return_value = response
+
+        assert send_message("hello", "abc123") is False
+        mock_logger.warning.assert_called_once()
 
 
 class TestSendReportMessageWithRetry:

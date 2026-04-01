@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import re
 from datetime import datetime, timezone
 from typing import Any
@@ -12,6 +13,7 @@ from tradingagents.dataflows.trade_calendar import cn_today_str, previous_cn_tra
 
 
 REFRESH_INTERVAL_SECONDS = 20
+logger = logging.getLogger(__name__)
 
 
 def get_tracking_board(db: Session, user_id: str) -> dict[str, Any]:
@@ -92,8 +94,8 @@ def _list_qmt_position_rows(db: Session, user_id: str) -> list[ImportedPortfolio
             ImportedPortfolioPositionDB.source == SOURCE_NAME,
         )
         .order_by(
-            ImportedPortfolioPositionDB.market_value.desc().nullslast(),
-            ImportedPortfolioPositionDB.current_position.desc().nullslast(),
+            ImportedPortfolioPositionDB.market_value.desc(),
+            ImportedPortfolioPositionDB.current_position.desc(),
             ImportedPortfolioPositionDB.symbol,
         )
         .all()
@@ -228,7 +230,8 @@ def _fetch_live_quotes(symbols: list[str]) -> dict[str, dict[str, Any]]:
 def _fetch_qmt_quotes(symbols: list[str]) -> dict[str, dict[str, Any]]:
     try:
         import xtquant.xtdata as xtdata  # type: ignore
-    except Exception:
+    except Exception as exc:
+        logger.warning("[tracking-board] xtdata import failed: %s", exc)
         return {}
 
     normalized_symbols = [symbol.strip().upper() for symbol in symbols if symbol and symbol.strip()]
@@ -237,7 +240,8 @@ def _fetch_qmt_quotes(symbols: list[str]) -> dict[str, dict[str, Any]]:
 
     try:
         raw = xtdata.get_full_tick(normalized_symbols)
-    except Exception:
+    except Exception as exc:
+        logger.warning("[tracking-board] xtdata quote fetch failed for %s: %s", normalized_symbols, exc)
         return {}
 
     if not isinstance(raw, dict):
@@ -288,7 +292,8 @@ def _fetch_em_batch_quotes(symbols: list[str]) -> dict[str, dict[str, Any]]:
         import akshare as ak  # type: ignore
 
         df = ak.stock_zh_a_spot_em()
-    except Exception:
+    except Exception as exc:
+        logger.warning("[tracking-board] Eastmoney batch quote fetch failed for %s: %s", symbols, exc)
         return {}
 
     if df is None or df.empty:
@@ -329,7 +334,8 @@ def _fetch_xq_quote(symbol: str) -> dict[str, Any] | None:
         import akshare as ak  # type: ignore
 
         spot = ak.stock_individual_spot_xq(symbol=_to_xq_symbol(symbol))
-    except Exception:
+    except Exception as exc:
+        logger.warning("[tracking-board] Xueqiu quote fetch failed for %s: %s", symbol, exc)
         return None
 
     if spot is None or getattr(spot, "empty", True):

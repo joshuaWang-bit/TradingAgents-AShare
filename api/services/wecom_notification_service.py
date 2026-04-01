@@ -4,6 +4,7 @@ import asyncio
 import json
 import logging
 from typing import TYPE_CHECKING
+from urllib.parse import parse_qs, urlencode, urlparse
 
 import requests
 
@@ -11,6 +12,8 @@ if TYPE_CHECKING:
     from api.database import ReportDB
 
 logger = logging.getLogger(__name__)
+_WECOM_WEBHOOK_HOST = "qyapi.weixin.qq.com"
+_WECOM_WEBHOOK_PATH = "/cgi-bin/webhook/send"
 
 
 def _clip_text(text: str | None, limit: int = 720) -> str:
@@ -51,6 +54,37 @@ def build_test_message(content: str | None = None) -> str:
     return message[:1800]
 
 
+def normalize_webhook_url(webhook_url: str) -> str:
+    normalized = str(webhook_url or "").strip()
+    if not normalized:
+        raise ValueError("企业微信 Webhook 不能为空")
+
+    if not normalized.startswith("http"):
+        if not all(char.isalnum() or char == "-" for char in normalized):
+            raise ValueError("企业微信 Webhook key 格式不正确")
+        return f"https://{_WECOM_WEBHOOK_HOST}{_WECOM_WEBHOOK_PATH}?key={normalized}"
+
+    parsed = urlparse(normalized)
+    if parsed.scheme != "https":
+        raise ValueError("企业微信 Webhook 必须使用 HTTPS")
+    if parsed.netloc != _WECOM_WEBHOOK_HOST or parsed.path != _WECOM_WEBHOOK_PATH:
+        raise ValueError("仅支持企业微信机器人的官方 Webhook 地址")
+    if parsed.params or parsed.fragment:
+        raise ValueError("企业微信 Webhook 地址格式不正确")
+
+    query = parse_qs(parsed.query, keep_blank_values=False)
+    if set(query.keys()) != {"key"}:
+        raise ValueError("企业微信 Webhook 地址必须仅包含 key 参数")
+    keys = query.get("key") or []
+    if len(keys) != 1:
+        raise ValueError("企业微信 Webhook 地址格式不正确")
+    key = keys[0].strip()
+    if not key or not all(char.isalnum() or char == "-" for char in key):
+        raise ValueError("企业微信 Webhook key 格式不正确")
+
+    return f"https://{_WECOM_WEBHOOK_HOST}{_WECOM_WEBHOOK_PATH}?{urlencode({'key': key})}"
+
+
 def send_message(content: str, webhook_url: str) -> bool:
     if not webhook_url:
         return False
@@ -58,9 +92,7 @@ def send_message(content: str, webhook_url: str) -> bool:
         "msgtype": "text",
         "text": {"content": content},
     }
-    url = webhook_url if webhook_url.startswith("http") else (
-        "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=" + webhook_url
-    )
+    url = normalize_webhook_url(webhook_url)
     response = requests.post(
         url,
         data=json.dumps(payload),
@@ -71,8 +103,12 @@ def send_message(content: str, webhook_url: str) -> bool:
     try:
         body = response.json()
     except Exception:
-        body = {}
-    return int(body.get("errcode", 0)) == 0
+        logger.warning(
+            "[wecom] non-JSON response body=%s",
+            _clip_text(getattr(response, "text", None), 240),
+        )
+        return False
+    return int(body.get("errcode", -1)) == 0
 
 
 async def send_report_message_with_retry(report: "ReportDB", webhook_url: str) -> bool:

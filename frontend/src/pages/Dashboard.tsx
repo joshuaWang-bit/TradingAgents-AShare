@@ -13,6 +13,7 @@ export default function Dashboard() {
     const [reportTotal, setReportTotal] = useState<number | null>(null)
     const [recentReports, setRecentReports] = useState<Report[]>([])
     const [trackingBoard, setTrackingBoard] = useState<TrackingBoardResponse | null>(null)
+    const [dashboardError, setDashboardError] = useState<string | null>(null)
     const navigate = useNavigate()
 
     const completedAgents = agents.filter(a => a.status === 'completed').length
@@ -28,9 +29,11 @@ export default function Dashboard() {
                 setReportTotal(res.total)
                 setRecentReports(res.reports)
             })
-            .catch(() => {
+            .catch(error => {
                 if (cancelled) return
+                console.error('Failed to load recent reports:', error)
                 setReportTotal(null)
+                setDashboardError(prev => prev || (error instanceof Error ? error.message : '加载控制台数据失败'))
             })
 
         api.getDashboardTrackingBoard()
@@ -38,9 +41,11 @@ export default function Dashboard() {
                 if (cancelled) return
                 setTrackingBoard(res)
             })
-            .catch(() => {
+            .catch(error => {
                 if (cancelled) return
+                console.error('Failed to load tracking board summary:', error)
                 setTrackingBoard(null)
+                setDashboardError(prev => prev || (error instanceof Error ? error.message : '加载跟踪看板摘要失败'))
             })
 
         return () => {
@@ -50,6 +55,11 @@ export default function Dashboard() {
 
     return (
         <div className="space-y-6">
+            {dashboardError && (
+                <div className="rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-600 dark:border-rose-900/50 dark:bg-rose-950/30 dark:text-rose-300">
+                    {dashboardError}
+                </div>
+            )}
             <div className="flex items-center justify-between">
                 <div>
                     <h1 className="text-2xl font-bold text-slate-900 dark:text-slate-100">控制台</h1>
