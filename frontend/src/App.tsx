@@ -9,6 +9,7 @@ import Portfolio from './pages/Portfolio'
 import TrackingBoard from './pages/TrackingBoard'
 import Login from './pages/Login'
 import Sponsor from './pages/Sponsor'
+import Thanks from './pages/Thanks'
 import { useAuthStore } from './stores/authStore'
 
 function RequireAuth({ children }: { children: JSX.Element }) {
@@ -35,6 +36,7 @@ function App() {
       <Routes>
         <Route path="/login" element={<Login />} />
         <Route path="/sponsor" element={<Sponsor />} />
+        <Route path="/thanks" element={<Thanks />} />
         <Route
           path="*"
           element={
