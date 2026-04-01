@@ -6,6 +6,7 @@ from functools import lru_cache
 from zoneinfo import ZoneInfo
 
 import pandas as pd
+from tradingagents.dataflows.xbx_data import load_trade_dates
 
 CN_TZ = ZoneInfo("Asia/Shanghai")
 
@@ -25,16 +26,8 @@ def _parse_date(date_str: str) -> date:
 @lru_cache(maxsize=1)
 def _load_cn_trade_dates() -> tuple[list[date], set[date]]:
     try:
-        import akshare as ak  # type: ignore
-
-        df = ak.tool_trade_date_hist_sina()
-        if df is None or df.empty or "trade_date" not in df.columns:
-            raise ValueError("empty trade date table")
-        dates = sorted(
-            pd_dt.date()
-            for pd_dt in pd.to_datetime(df["trade_date"], errors="coerce")
-            if str(pd_dt) != "NaT"
-        )
+        timestamps, _ = load_trade_dates()
+        dates = [ts.date() for ts in timestamps]
         return dates, set(dates)
     except Exception:
         # Fallback: no holiday calendar, only weekend rule.

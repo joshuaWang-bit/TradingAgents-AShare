@@ -1,5 +1,5 @@
-import { FormEvent, useMemo, useState } from 'react'
-import { ArrowRight, CheckCircle2, Loader2, LockKeyhole, Mail, Radar, ShieldCheck, Sparkles, TrendingUp } from 'lucide-react'
+import { FormEvent, useEffect, useMemo, useState } from 'react'
+import { ArrowRight, CheckCircle2, Database, Key, Loader2, Radar, ShieldCheck, Sparkles, TrendingUp, Webhook } from 'lucide-react'
 import { api } from '@/services/api'
 import { useAuthStore } from '@/stores/authStore'
 import { useNavigate } from 'react-router-dom'
@@ -40,41 +40,72 @@ const AGENT_GROUPS = [
 export default function Login() {
     const navigate = useNavigate()
     const { setAuth } = useAuthStore()
-    const [email, setEmail] = useState('')
-    const [code, setCode] = useState('')
-    const [step, setStep] = useState<'email' | 'code'>('email')
+    const [xbxDataDir, setXbxDataDir] = useState('E:\\STOCKDATA')
+    const [quickThinkLlm, setQuickThinkLlm] = useState('')
+    const [deepThinkLlm, setDeepThinkLlm] = useState('')
+    const [llmApiKey, setLlmApiKey] = useState('')
+    const [wecomWebhook, setWecomWebhook] = useState('')
+    const [hasStoredApiKey, setHasStoredApiKey] = useState(false)
+    const [hasStoredWebhook, setHasStoredWebhook] = useState(false)
     const [loading, setLoading] = useState(false)
+    const [bootstrapping, setBootstrapping] = useState(true)
     const [message, setMessage] = useState<string | null>(null)
     const [error, setError] = useState<string | null>(null)
 
-    const submitLabel = useMemo(() => step === 'email' ? '发送验证码' : '进入研究终端', [step])
+    const submitLabel = useMemo(() => loading ? '保存中...' : '保存配置并进入', [loading])
 
-    const handleRequestCode = async (e: FormEvent) => {
+    useEffect(() => {
+        let cancelled = false
+        const bootstrap = async () => {
+            setBootstrapping(true)
+            setError(null)
+            try {
+                const session = await api.bootstrapLocalSession()
+                if (cancelled) return
+                setAuth(session.access_token, session.user)
+                const cfg = await api.getConfig()
+                if (cancelled) return
+                setXbxDataDir(cfg.xbx_data_dir || 'E:\\STOCKDATA')
+                setQuickThinkLlm(cfg.quick_think_llm || '')
+                setDeepThinkLlm(cfg.deep_think_llm || '')
+                setHasStoredApiKey(!!cfg.has_api_key)
+                setHasStoredWebhook(!!cfg.has_wecom_webhook)
+            } catch (err) {
+                if (!cancelled) {
+                    setError(err instanceof Error ? err.message : '初始化本地工作区失败')
+                }
+            } finally {
+                if (!cancelled) setBootstrapping(false)
+            }
+        }
+        void bootstrap()
+        return () => {
+            cancelled = true
+        }
+    }, [setAuth])
+
+    const handleSubmit = async (e: FormEvent) => {
         e.preventDefault()
         setLoading(true)
         setError(null)
         setMessage(null)
         try {
-            const res = await api.requestLoginCode(email)
-            setStep('code')
-            setMessage(res.dev_code ? `开发环境验证码：${res.dev_code}` : '验证码已发送，请查收邮箱。')
-        } catch (err) {
-            setError(err instanceof Error ? err.message : '发送验证码失败')
-        } finally {
-            setLoading(false)
-        }
-    }
-
-    const handleVerify = async (e: FormEvent) => {
-        e.preventDefault()
-        setLoading(true)
-        setError(null)
-        try {
-            const res = await api.verifyLoginCode(email, code)
-            setAuth(res.access_token, res.user)
+            const response = await api.updateConfig({
+                xbx_data_dir: xbxDataDir.trim(),
+                quick_think_llm: quickThinkLlm.trim(),
+                deep_think_llm: deepThinkLlm.trim(),
+                api_key: llmApiKey.trim() || undefined,
+                wecom_webhook_url: wecomWebhook.trim() || undefined,
+                warmup: true,
+            })
+            setHasStoredApiKey(!!response.has_api_key)
+            setHasStoredWebhook(!!response.current.has_wecom_webhook)
+            setLlmApiKey('')
+            setWecomWebhook('')
+            setMessage(response.warmup?.message || '配置已保存')
             navigate('/analysis', { replace: true })
         } catch (err) {
-            setError(err instanceof Error ? err.message : '登录失败')
+            setError(err instanceof Error ? err.message : '保存配置失败')
         } finally {
             setLoading(false)
         }
@@ -150,7 +181,7 @@ export default function Login() {
                         <div className="mt-5 flex items-start gap-3 rounded-[24px] bg-slate-950 px-4 py-4 text-slate-100 dark:border dark:border-slate-800/80 dark:bg-slate-900">
                             <TrendingUp className="mt-0.5 h-4 w-4 shrink-0 text-cyan-400" />
                             <div className="text-sm leading-6 text-slate-300">
-                                登录后可持续保存研究历史、模型配置与分析上下文，用于跟踪同一标的在不同日期下的判断演进。
+                                本地工作区会持续保存研究历史、模型配置与分析上下文，用于跟踪同一标的在不同日期下的判断演进。
                             </div>
                         </div>
                     </div>
@@ -161,57 +192,86 @@ export default function Login() {
                         <div className="rounded-[36px] border border-slate-200/80 bg-white/92 p-7 shadow-[0_24px_80px_rgba(15,23,42,0.08)] backdrop-blur-xl dark:border-slate-800/90 dark:bg-slate-950 dark:shadow-[0_28px_88px_rgba(2,6,23,0.56)]">
                             <div className="flex items-center justify-between">
                                 <div>
-                                    <div className="text-[11px] tracking-[0.22em] text-slate-400 dark:text-slate-500">身份验证</div>
-                                    <h2 className="mt-2 text-2xl font-semibold text-slate-950 dark:text-white">进入个人研究空间</h2>
+                                    <div className="text-[11px] tracking-[0.22em] text-slate-400 dark:text-slate-500">首次配置</div>
+                                    <h2 className="mt-2 text-2xl font-semibold text-slate-950 dark:text-white">连接 xbx 数据与模型</h2>
                                 </div>
                                 <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-gradient-to-br from-cyan-500 via-blue-500 to-indigo-600 text-white shadow-[0_12px_30px_rgba(37,99,235,0.28)]">
                                     <ShieldCheck className="h-6 w-6" />
                                 </div>
                             </div>
 
-                            <div className="mt-6 flex items-center gap-2 rounded-2xl bg-slate-100 p-1 dark:bg-slate-900 dark:ring-1 dark:ring-slate-800">
-                                <div className={`flex-1 rounded-xl px-3 py-2 text-center text-sm transition-colors ${step === 'email' ? 'bg-white text-slate-950 shadow-sm dark:bg-slate-800 dark:text-white' : 'text-slate-500 dark:text-slate-400'}`}>
-                                    邮箱验证
-                                </div>
-                                <div className={`flex-1 rounded-xl px-3 py-2 text-center text-sm transition-colors ${step === 'code' ? 'bg-white text-slate-950 shadow-sm dark:bg-slate-800 dark:text-white' : 'text-slate-500 dark:text-slate-400'}`}>
-                                    输入验证码
-                                </div>
-                            </div>
-
-                            <form onSubmit={step === 'email' ? handleRequestCode : handleVerify} className="mt-6 space-y-4">
+                            <form onSubmit={handleSubmit} className="mt-6 space-y-4">
                                 <div>
-                                    <label className="mb-2 block text-sm font-medium text-slate-600 dark:text-slate-400">邮箱地址</label>
+                                    <label className="mb-2 block text-sm font-medium text-slate-600 dark:text-slate-400">xbx 数据目录</label>
                                     <div className="relative">
-                                        <Mail className="absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+                                        <Database className="absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
                                         <input
-                                            type="email"
-                                            value={email}
-                                            onChange={(e) => setEmail(e.target.value)}
+                                            type="text"
+                                            value={xbxDataDir}
+                                            onChange={(e) => setXbxDataDir(e.target.value)}
                                             className="input h-12 w-full rounded-2xl pl-11"
-                                            placeholder="you@example.com"
-                                            disabled={loading || step === 'code'}
+                                            placeholder="例如：E:\\STOCKDATA"
+                                            disabled={loading || bootstrapping}
                                             required
                                         />
                                     </div>
                                 </div>
 
-                                {step === 'code' && (
-                                    <div>
-                                        <label className="mb-2 block text-sm font-medium text-slate-600 dark:text-slate-400">验证码</label>
-                                        <div className="relative">
-                                            <LockKeyhole className="absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
-                                            <input
-                                                type="text"
-                                                value={code}
-                                                onChange={(e) => setCode(e.target.value)}
-                                                className="input h-12 w-full rounded-2xl pl-11 tracking-[0.35em]"
-                                                placeholder="输入 6 位验证码"
-                                                maxLength={6}
-                                                required
-                                            />
-                                        </div>
+                                <div>
+                                    <label className="mb-2 block text-sm font-medium text-slate-600 dark:text-slate-400">常规模型</label>
+                                    <input
+                                        type="text"
+                                        value={quickThinkLlm}
+                                        onChange={(e) => setQuickThinkLlm(e.target.value)}
+                                        className="input h-12 w-full rounded-2xl"
+                                        placeholder="例如：gpt-4.1-mini / deepseek-chat"
+                                        disabled={loading || bootstrapping}
+                                        required
+                                    />
+                                </div>
+
+                                <div>
+                                    <label className="mb-2 block text-sm font-medium text-slate-600 dark:text-slate-400">推理模型</label>
+                                    <input
+                                        type="text"
+                                        value={deepThinkLlm}
+                                        onChange={(e) => setDeepThinkLlm(e.target.value)}
+                                        className="input h-12 w-full rounded-2xl"
+                                        placeholder="例如：gpt-4.1 / deepseek-reasoner"
+                                        disabled={loading || bootstrapping}
+                                        required
+                                    />
+                                </div>
+
+                                <div>
+                                    <label className="mb-2 block text-sm font-medium text-slate-600 dark:text-slate-400">模型 API Key</label>
+                                    <div className="relative">
+                                        <Key className="absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+                                        <input
+                                            type="password"
+                                            value={llmApiKey}
+                                            onChange={(e) => setLlmApiKey(e.target.value)}
+                                            className="input h-12 w-full rounded-2xl pl-11"
+                                            placeholder={hasStoredApiKey ? '已保存，留空则保持不变' : '输入模型 API Key'}
+                                            disabled={loading || bootstrapping}
+                                        />
                                     </div>
-                                )}
+                                </div>
+
+                                <div>
+                                    <label className="mb-2 block text-sm font-medium text-slate-600 dark:text-slate-400">企业微信机器人 Webhook</label>
+                                    <div className="relative">
+                                        <Webhook className="absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+                                        <input
+                                            type="text"
+                                            value={wecomWebhook}
+                                            onChange={(e) => setWecomWebhook(e.target.value)}
+                                            className="input h-12 w-full rounded-2xl pl-11"
+                                            placeholder={hasStoredWebhook ? '已保存，留空则保持不变' : '可选：粘贴企业微信机器人 Webhook'}
+                                            disabled={loading || bootstrapping}
+                                        />
+                                    </div>
+                                </div>
 
                                 {message && (
                                     <div className="flex items-start gap-2 rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700 dark:border-emerald-500/20 dark:bg-emerald-500/10 dark:text-emerald-300">
@@ -225,29 +285,14 @@ export default function Login() {
                                     </div>
                                 )}
 
-                                <button type="submit" disabled={loading} className="btn-primary flex h-12 w-full items-center justify-center gap-2 rounded-2xl">
-                                    {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <ArrowRight className="h-4 w-4" />}
+                                <button type="submit" disabled={loading || bootstrapping} className="btn-primary flex h-12 w-full items-center justify-center gap-2 rounded-2xl">
+                                    {loading || bootstrapping ? <Loader2 className="h-4 w-4 animate-spin" /> : <ArrowRight className="h-4 w-4" />}
                                     {submitLabel}
                                 </button>
-
-                                {step === 'code' && (
-                                    <button
-                                        type="button"
-                                        onClick={() => {
-                                            setCode('')
-                                            setStep('email')
-                                            setMessage(null)
-                                            setError(null)
-                                        }}
-                                        className="btn-secondary flex h-12 w-full items-center justify-center rounded-2xl"
-                                    >
-                                        重新获取验证码
-                                    </button>
-                                )}
                             </form>
 
                             <div className="mt-6 rounded-2xl bg-slate-100/90 px-4 py-3 text-xs leading-6 text-slate-500 dark:border dark:border-slate-800/80 dark:bg-slate-900 dark:text-slate-400">
-                                当前账户将独占保存报告历史、模型密钥与分析上下文，适合持续跟踪个人研究对象。
+                                当前分支使用本地单机工作区，不再需要邮箱登录；保存后会直接使用 xbx 本地数据目录与当前模型配置进入研究终端。
                             </div>
                         </div>
                     </div>

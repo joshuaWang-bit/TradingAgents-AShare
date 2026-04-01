@@ -262,6 +262,12 @@ class ApiService {
         })
     }
 
+    async bootstrapLocalSession(): Promise<AuthVerifyResponse> {
+        return this.request('/v1/auth/bootstrap-local', {
+            method: 'POST',
+        })
+    }
+
     async requestLoginCode(email: string): Promise<{ message: string; dev_code?: string }> {
         return this.request('/v1/auth/request-code', {
             method: 'POST',

@@ -8,7 +8,7 @@ import type { Announcement } from '@/types'
 type ThemeMode = 'system' | 'light' | 'dark'
 
 function getInitials(email?: string | null): string {
-    if (!email) return 'TA'
+    if (!email) return 'XB'
     return email.slice(0, 2).toUpperCase()
 }
 
@@ -229,7 +229,7 @@ export default function Header() {
                                 <div className="absolute right-0 top-[calc(100%+0.75rem)] w-64 rounded-3xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-950 shadow-[0_24px_80px_rgba(15,23,42,0.18)] overflow-hidden">
                                     <div className="px-4 py-3.5 border-b border-slate-100 dark:border-slate-900">
                                         <div className="text-[11px] tracking-[0.18em] text-slate-400 dark:text-slate-500">研究空间</div>
-                                        <div className="mt-1.5 text-sm font-medium leading-6 text-slate-950 dark:text-slate-50 break-all">{user.email}</div>
+                                        <div className="mt-1.5 text-sm font-medium leading-6 text-slate-950 dark:text-slate-50 break-all">xbxdata 本地工作区</div>
                                     </div>
                                     <div className="p-2">
                                         <button
@@ -297,7 +297,7 @@ export default function Header() {
                                             <div className="w-8 h-8 rounded-xl bg-rose-50 dark:bg-rose-500/10 flex items-center justify-center">
                                                 <LogOut className="w-4 h-4" />
                                             </div>
-                                            退出登录
+                                            退出本地会话
                                         </button>
                                     </div>
                                 </div>

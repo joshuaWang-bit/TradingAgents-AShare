@@ -12,7 +12,7 @@ import { buildQmtSyncSummary } from '@/utils/qmtSync'
 const HORIZON_LABELS: Record<string, string> = { short: '短线', medium: '中线' }
 const WATCHLIST_BATCH_SPLIT_RE = /[,\s，、；;]+/
 const SCHEDULED_TEST_TOOLTIP =
-    '会立刻对当前勾选的股票批量发起最近交易日分析请求，并自动带上已导入的持仓上下文；若已开启邮箱报告，也可以顺带检查邮箱是否收到结果。不会改动原有定时设置。'
+    '会立刻对当前勾选的股票批量发起最近交易日分析请求，并自动带上已导入的持仓上下文；若已配置企业微信机器人，也会继续按原定时设置发送摘要通知。不会改动原有定时设置。'
 
 function HorizonSwitch({
     value,

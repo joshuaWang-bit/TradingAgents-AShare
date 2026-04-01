@@ -550,11 +550,12 @@ export interface RuntimeConfig {
     deep_think_llm: string
     quick_think_llm: string
     backend_url: string
+    xbx_data_dir: string
     max_debate_rounds: number
     max_risk_discuss_rounds: number
     has_api_key?: boolean
+    has_wecom_webhook?: boolean
     server_fallback_enabled?: boolean
-    email_report_enabled?: boolean
 }
 
 export interface RuntimeConfigUpdateResponse {
@@ -570,11 +571,13 @@ export interface RuntimeConfigUpdate {
     deep_think_llm?: string
     quick_think_llm?: string
     backend_url?: string
+    xbx_data_dir?: string
     max_debate_rounds?: number
     max_risk_discuss_rounds?: number
     api_key?: string
+    wecom_webhook_url?: string
     clear_api_key?: boolean
-    email_report_enabled?: boolean
+    clear_wecom_webhook?: boolean
     warmup?: boolean
     force_warmup?: boolean
 }

@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 from api.database import ImportedPortfolioPositionDB, QmtImportConfigDB, ReportDB
 from api.services.qmt_import_service import SOURCE_NAME
 from tradingagents.dataflows.trade_calendar import cn_today_str, previous_cn_trading_day
+from tradingagents.dataflows.xbx_data import load_stock_daily_df
 
 
 REFRESH_INTERVAL_SECONDS = 20
@@ -215,13 +216,8 @@ def _fetch_live_quotes(symbols: list[str]) -> dict[str, dict[str, Any]]:
     if not missing:
         return quotes
 
-    fallback_quotes = _fetch_em_batch_quotes(missing)
+    fallback_quotes = _fetch_local_latest_quotes(missing)
     quotes.update(fallback_quotes)
-    missing = [symbol for symbol in symbols if symbol not in quotes]
-    for symbol in missing:
-        quote = _fetch_xq_quote(symbol)
-        if quote:
-            quotes[symbol] = quote
     return quotes
 
 
@@ -283,76 +279,36 @@ def _fetch_qmt_quotes(symbols: list[str]) -> dict[str, dict[str, Any]]:
     return quotes
 
 
-def _fetch_em_batch_quotes(symbols: list[str]) -> dict[str, dict[str, Any]]:
-    try:
-        import akshare as ak  # type: ignore
-
-        df = ak.stock_zh_a_spot_em()
-    except Exception:
-        return {}
-
-    if df is None or df.empty:
-        return {}
-
-    symbol_by_code = {_extract_code(symbol): symbol for symbol in symbols}
-    if "代码" not in df.columns:
-        return {}
-
-    df = df.copy()
-    df["代码"] = df["代码"].astype(str).str.zfill(6)
-    filtered = df[df["代码"].isin(symbol_by_code.keys())]
-    if filtered.empty:
-        return {}
-
+def _fetch_local_latest_quotes(symbols: list[str]) -> dict[str, dict[str, Any]]:
     now_iso = datetime.now(timezone.utc).isoformat()
     quotes: dict[str, dict[str, Any]] = {}
-    for _, row in filtered.iterrows():
-        symbol = symbol_by_code.get(str(row.get("代码", "")).zfill(6))
-        if not symbol:
+    for symbol in symbols:
+        df = load_stock_daily_df(symbol)
+        if df.empty:
             continue
+        row = df.iloc[-1]
+        previous_close = _to_float(row.get("previous_close"))
+        price = _to_float(row.get("close"))
+        change = None
+        change_pct = None
+        if price is not None and previous_close is not None:
+            change = round(price - previous_close, 4)
+            if previous_close != 0:
+                change_pct = round((change / previous_close) * 100, 4)
         quotes[symbol] = {
-            "price": _to_float(row.get("最新价")),
-            "open": _to_float(row.get("今开")),
-            "change": _to_float(row.get("涨跌额")),
-            "change_pct": _to_float(row.get("涨跌幅")),
-            "high": _to_float(row.get("最高")),
-            "low": _to_float(row.get("最低")),
-            "previous_close": _to_float(row.get("昨收")),
+            "price": price,
+            "open": _to_float(row.get("open")),
+            "change": change,
+            "change_pct": change_pct,
+            "high": _to_float(row.get("high")),
+            "low": _to_float(row.get("low")),
+            "previous_close": previous_close,
+            "volume": _to_float(row.get("volume")),
+            "amount": _to_float(row.get("amount")),
             "quote_time": now_iso,
-            "source": "akshare_em_spot",
+            "source": "xbx_local_daily",
         }
     return quotes
-
-
-def _fetch_xq_quote(symbol: str) -> dict[str, Any] | None:
-    try:
-        import akshare as ak  # type: ignore
-
-        spot = ak.stock_individual_spot_xq(symbol=_to_xq_symbol(symbol))
-    except Exception:
-        return None
-
-    if spot is None or getattr(spot, "empty", True):
-        return None
-    if not {"item", "value"}.issubset(set(spot.columns)):
-        return None
-
-    kv = dict(zip(spot["item"].astype(str), spot["value"]))
-    quote_time = kv.get("时间")
-    if quote_time:
-        quote_time = str(quote_time)
-
-    return {
-        "price": _to_float(kv.get("现价")),
-        "open": _to_float(kv.get("今开")),
-        "change": _to_float(kv.get("涨跌")),
-        "change_pct": _to_float(kv.get("涨幅")),
-        "high": _to_float(kv.get("最高")),
-        "low": _to_float(kv.get("最低")),
-        "previous_close": _to_float(kv.get("昨收")),
-        "quote_time": quote_time,
-        "source": "akshare_xq_spot",
-    }
 
 
 def _extract_code(symbol: str) -> str:

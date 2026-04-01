@@ -125,6 +125,11 @@ def _ensure_user_schema() -> None:
                 conn.execute(text("ALTER TABLE users ADD COLUMN last_login_ip VARCHAR(45)"))
             if "email_report_enabled" not in columns:
                 conn.execute(text("ALTER TABLE users ADD COLUMN email_report_enabled BOOLEAN NOT NULL DEFAULT 1"))
+            llm_columns = {row[1] for row in conn.execute(text("PRAGMA table_info(user_llm_configs)"))}
+            if "xbx_data_dir" not in llm_columns:
+                conn.execute(text("ALTER TABLE user_llm_configs ADD COLUMN xbx_data_dir VARCHAR(500)"))
+            if "wecom_webhook_encrypted" not in llm_columns:
+                conn.execute(text("ALTER TABLE user_llm_configs ADD COLUMN wecom_webhook_encrypted TEXT"))
     except Exception as e:
         print(f"Warning: Failed to ensure user schema: {e}")
 
@@ -318,9 +323,11 @@ class UserLLMConfigDB(Base):
     backend_url = Column(String(500), nullable=True)
     quick_think_llm = Column(String(255), nullable=True)
     deep_think_llm = Column(String(255), nullable=True)
+    xbx_data_dir = Column(String(500), nullable=True)
     max_debate_rounds = Column(Integer, nullable=True)
     max_risk_discuss_rounds = Column(Integer, nullable=True)
     api_key_encrypted = Column(Text, nullable=True)
+    wecom_webhook_encrypted = Column(Text, nullable=True)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
 

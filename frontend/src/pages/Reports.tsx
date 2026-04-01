@@ -294,7 +294,7 @@ export default function Reports() {
                 <div>
                     <h1 className="text-2xl font-bold text-slate-900 dark:text-slate-100">历史报告</h1>
                     <p className="text-slate-500 dark:text-slate-400 mt-1">
-                        {user?.email ? `${user.email} 的私有分析记录 · 共 ${total} 份` : `共 ${total} 份分析报告`}
+                        {user ? `本地研究空间分析记录 · 共 ${total} 份` : `共 ${total} 份分析报告`}
                     </p>
                 </div>
             </div>

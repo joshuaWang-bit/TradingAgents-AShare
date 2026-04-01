@@ -85,6 +85,9 @@ def get_vendor(category: str, method: str = None) -> str:
 def _resolve_vendor_chain(method: str, configured_vendor: str) -> list[str]:
     configured = [v.strip() for v in configured_vendor.split(",") if v.strip()]
     fallback = configured.copy()
+    config = get_config()
+    if bool(config.get("strict_data_vendors", False)):
+        return fallback
 
     for provider_name in _registry.list_names():
         if provider_name not in fallback:

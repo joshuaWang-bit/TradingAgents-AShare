@@ -62,6 +62,11 @@ from tradingagents.graph.trading_graph import TradingAgentsGraph
 from tradingagents.dataflows.trade_calendar import cn_today_str
 from tradingagents.dataflows.config import set_config
 from tradingagents.dataflows.interface import route_to_vendor
+from tradingagents.dataflows.xbx_data import (
+    get_stock_name_map as _get_xbx_stock_name_map,
+    get_xbx_data_dir,
+    load_index_daily_df,
+)
 from tradingagents.graph.intent_parser import parse_intent as _parse_intent
 from tradingagents.agents.utils.context_utils import USER_CONTEXT_KEYS, normalize_user_context
 from tradingagents.agents.utils.agent_states import current_tracker_var
@@ -199,26 +204,25 @@ def _build_scheduled_analyze_request(
     )
 
 
-async def _send_scheduled_report_email_if_enabled(user_id: str, report_id: str, symbol: str) -> None:
-    """Send the generated report email when the user has email delivery enabled."""
+async def _send_scheduled_report_wecom_if_configured(user_id: str, report_id: str, symbol: str) -> None:
+    """Send the generated report to a configured WeCom webhook."""
     try:
-        from api.services.email_report_service import send_report_email_with_retry
+        from api.services.wecom_notification_service import send_report_message_with_retry
 
-        email_user = None
-        email_report = None
+        report_to_send = None
+        webhook_url = None
         with get_db_ctx() as db:
-            user = db.query(UserDB).filter(UserDB.id == user_id).first()
             report = db.query(ReportDB).filter(ReportDB.id == report_id).first()
-            if user and report and getattr(user, "email_report_enabled", True):
-                db.expunge(user)
+            user_cfg = auth_service.get_user_llm_config(db, user_id)
+            webhook_url = auth_service.decrypt_secret(getattr(user_cfg, "wecom_webhook_encrypted", None))
+            if report and webhook_url:
                 db.expunge(report)
-                email_user = user
-                email_report = report
-        if email_user and email_report:
-            _log(f"[Scheduler] Sending email report for {symbol} to {email_user.email}")
-            asyncio.create_task(send_report_email_with_retry(email_user, email_report))
+                report_to_send = report
+        if report_to_send and webhook_url:
+            _log(f"[Scheduler] Sending WeCom report for {symbol}")
+            asyncio.create_task(send_report_message_with_retry(report_to_send, webhook_url))
     except Exception as e:
-        logger.warning(f"[Scheduler] Email send failed for {symbol}: {e}")
+        logger.warning(f"[Scheduler] WeCom send failed for {symbol}: {e}")
 
 
 async def _run_scheduled_analysis_once(
@@ -261,7 +265,7 @@ async def _run_scheduled_analysis_once(
                 scheduled_service.record_manual_test_result(db, task_id, "success", report_id=job_id)
         _log(f"[Scheduler] Completed {symbol}")
 
-        await _send_scheduled_report_email_if_enabled(user_id, job_id, symbol)
+        await _send_scheduled_report_wecom_if_configured(user_id, job_id, symbol)
     except Exception as e:
         logger.error(f"[Scheduler] Failed {symbol}: {e}\n{traceback.format_exc()}")
         with get_db_ctx() as db:
@@ -399,6 +403,7 @@ _background_tasks: set = set()
 # ── A-share stock name → code cache ──────────────────────────────────────────
 _cn_stock_map: Optional[Dict[str, str]] = None  # name -> "XXXXXX.SH/SZ"
 _cn_stock_map_lock = Lock()
+_LOCAL_USER_EMAIL = os.getenv("TA_LOCAL_USER_EMAIL", "local@xbxdata.local").strip() or "local@xbxdata.local"
 
 
 def _utcnow_iso() -> str:
@@ -440,7 +445,7 @@ _STOCK_MAP_TTL = 7 * 86400  # 7 days
 
 
 def _load_cn_stock_map() -> Dict[str, str]:
-    """Lazy-load and cache akshare A-share name→code mapping with 7-day TTL."""
+    """Lazy-load and cache xbx local A-share name→code mapping with 7-day TTL."""
     global _cn_stock_map, _cn_stock_map_loaded_at
     import time as _time
     now = _time.time()
@@ -452,18 +457,10 @@ def _load_cn_stock_map() -> Dict[str, str]:
         if _cn_stock_map is not None and (now - _cn_stock_map_loaded_at) <= _STOCK_MAP_TTL:
             return _cn_stock_map
         try:
-            import akshare as ak
-            df = ak.stock_info_a_code_name()
-            result: Dict[str, str] = {}
-            for _, row in df.iterrows():
-                name = str(row.get("name", "")).strip()
-                code = str(row.get("code", "")).strip()
-                if name and code:
-                    normalized = _normalize_symbol(code)
-                    result[name] = normalized
+            result = _get_xbx_stock_name_map()
             _cn_stock_map = result
             _cn_stock_map_loaded_at = now
-            _log(f"[StockMap] Loaded {len(result)} A-share stocks.")
+            _log(f"[StockMap] Loaded {len(result)} A-share stocks from {get_xbx_data_dir()}.")
         except Exception as e:
             _log(f"[StockMap] Failed to load: {e}")
             if _cn_stock_map is None:
@@ -774,7 +771,6 @@ class UserResponse(BaseModel):
     email: str
     created_at: Optional[datetime] = None
     last_login_at: Optional[datetime] = None
-    email_report_enabled: bool = True
 
     model_config = {"from_attributes": True}
 
@@ -803,11 +799,12 @@ class UserRuntimeConfigResponse(BaseModel):
     deep_think_llm: str
     quick_think_llm: str
     backend_url: str
+    xbx_data_dir: str
     max_debate_rounds: int
     max_risk_discuss_rounds: int
     has_api_key: bool = False
+    has_wecom_webhook: bool = False
     server_fallback_enabled: bool = True
-    email_report_enabled: bool = True
 
 
 class UserRuntimeConfigUpdateRequest(BaseModel):
@@ -815,11 +812,13 @@ class UserRuntimeConfigUpdateRequest(BaseModel):
     deep_think_llm: Optional[str] = None
     quick_think_llm: Optional[str] = None
     backend_url: Optional[str] = None
+    xbx_data_dir: Optional[str] = None
     max_debate_rounds: Optional[int] = None
     max_risk_discuss_rounds: Optional[int] = None
-    email_report_enabled: Optional[bool] = None
     api_key: Optional[str] = None
+    wecom_webhook_url: Optional[str] = None
     clear_api_key: bool = False
+    clear_wecom_webhook: bool = False
     warmup: bool = True
     force_warmup: bool = False
 
@@ -904,6 +903,7 @@ def _user_config_overrides(user_id: Optional[str], db: Optional[Session] = None)
             "backend_url",
             "quick_think_llm",
             "deep_think_llm",
+            "xbx_data_dir",
             "max_debate_rounds",
             "max_risk_discuss_rounds",
         ):
@@ -1115,6 +1115,30 @@ def _build_result_payload(final_state: Dict[str, Any]) -> Dict[str, Any]:
         "risk_feedback_state": final_state.get("risk_feedback_state"),
         "final_trade_decision": final_state.get("final_trade_decision"),
     }
+
+
+def _ensure_analysis_result_has_content(
+    result_data: Optional[Dict[str, Any]],
+    *,
+    context_label: str,
+) -> None:
+    if not result_data:
+        raise RuntimeError(f"{context_label}: empty analysis content")
+
+    content_fields = (
+        "final_trade_decision",
+        "investment_plan",
+        "trader_investment_plan",
+        "market_report",
+        "sentiment_report",
+        "news_report",
+        "fundamentals_report",
+        "macro_report",
+        "smart_money_report",
+    )
+    has_content = any(str(result_data.get(field) or "").strip() for field in content_fields)
+    if not has_content:
+        raise RuntimeError(f"{context_label}: empty analysis content")
 
 
 class AgentProgressTracker:
@@ -1668,6 +1692,7 @@ async def _run_job(
                 last_report: Dict[str, str] = {}
                 seen: Dict[str, bool] = {}   # 追踪哪些字段已出现过，避免重复事件
                 horizon_final = None
+                horizon_stream_error: Optional[Exception] = None
 
                 # DB 更新使用短生命周期 session，避免长期占用连接池
                 def _horizon_partial_update(updates: dict):
@@ -1736,9 +1761,15 @@ async def _run_job(
                         if db_updates:
                             await asyncio.to_thread(_horizon_partial_update, db_updates)
                 except Exception as e:
+                    horizon_stream_error = e
                     _log(f"Error during horizon streaming ({horizon}): {e}")
                 finally:
                     current_tracker_var.reset(_tracker_token)
+
+                if horizon_stream_error is not None:
+                    raise RuntimeError(
+                        f"horizon {horizon} streaming failed: {type(horizon_stream_error).__name__}: {horizon_stream_error}"
+                    ) from horizon_stream_error
 
                 horizon_states[horizon] = horizon_final
                 for agent, st in h_tracker.status.items():
@@ -1784,6 +1815,7 @@ async def _run_job(
                     short_r.get("analyst_traces", []) + medium_r.get("analyst_traces", [])
                 ),
             }
+            _ensure_analysis_result_has_content(result, context_label="dual_horizon")
             # LLM 结构化提取（目标价、止损、信心、风险、关键指标）
             # 注意：必须在 _set_job(status="completed") 之前完成，否则 SSE 超时
             # 会因为看到 status="completed" 而提前关闭流，导致 job.completed 事件丢失。
@@ -1884,6 +1916,7 @@ async def _run_job(
             )
             last_report: Dict[str, str] = {}
             seen: Dict[str, bool] = {}
+            stream_error: Optional[Exception] = None
 
             _tracker_token = current_tracker_var.set(tracker)
             try:
@@ -1986,9 +2019,14 @@ async def _run_job(
                             )
                 
             except Exception as e:
+                stream_error = e
                 _log(f"Error during default streaming: {e}")
             finally:
                 current_tracker_var.reset(_tracker_token)
+            if stream_error is not None:
+                raise RuntimeError(
+                    f"default streaming failed: {type(stream_error).__name__}: {stream_error}"
+                ) from stream_error
         else:
             final_state, _ = await asyncio.to_thread(
                 graph.propagate,
@@ -2005,6 +2043,7 @@ async def _run_job(
 
         decision = graph.process_signal(final_state["final_trade_decision"]) or "UNKNOWN"
         result = _build_result_payload(final_state)
+        _ensure_analysis_result_has_content(result, context_label="single_horizon")
         result["decision"] = decision
 
         # 全量收口为 completed/skipped
@@ -2279,72 +2318,40 @@ def _normalize_kline_df(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def _fetch_index_kline(symbol: str, start_date: str, end_date: str) -> List[Dict[str, Any]]:
-    import akshare as ak  # type: ignore
-
     symbol_key = symbol.upper()
-    vendor_symbol = CN_INDEX_SYMBOL_MAP.get(symbol_key)
-    if not vendor_symbol:
+    if symbol_key not in CN_INDEX_SYMBOL_MAP:
         return []
-
-    yyyymmdd_start = start_date.replace("-", "")
-    yyyymmdd_end = end_date.replace("-", "")
-    last_exc: Exception | None = None
-
-    for fetcher in (
-        lambda: ak.stock_zh_index_daily_em(
-            symbol=vendor_symbol,
-            start_date=yyyymmdd_start,
-            end_date=yyyymmdd_end,
-        ),
-        lambda: ak.stock_zh_index_daily(symbol=vendor_symbol),
-        lambda: ak.index_zh_a_hist(
-            symbol=symbol_key.split(".")[0],
-            period="daily",
-            start_date=yyyymmdd_start,
-            end_date=yyyymmdd_end,
-        ),
-    ):
-        try:
-            raw_df = fetcher()
-            df = _normalize_kline_df(raw_df)
-            if df.empty:
-                continue
-            df = df[(df["Date"] >= pd.to_datetime(start_date)) & (df["Date"] <= pd.to_datetime(end_date))]
-            if df.empty:
-                continue
-            candles: List[Dict[str, Any]] = []
-            prev_close: float | None = None
-            for _, row in df.iterrows():
-                close = float(row["Close"])
-                change = float(row["Change"]) if "Change" in df.columns and pd.notna(row.get("Change")) else (close - prev_close if prev_close is not None else None)
-                change_pct = (
-                    float(row["ChangePercent"])
-                    if "ChangePercent" in df.columns and pd.notna(row.get("ChangePercent"))
-                    else ((change / prev_close) * 100 if prev_close not in (None, 0) and change is not None else None)
-                )
-                candles.append(
-                    {
-                        "date": row["Date"].strftime("%Y-%m-%d"),
-                        "open": float(row["Open"]),
-                        "high": float(row["High"]),
-                        "low": float(row["Low"]),
-                        "close": close,
-                        "volume": float(row["Volume"]) if "Volume" in df.columns and pd.notna(row.get("Volume")) else None,
-                        "amount": float(row["Amount"]) if "Amount" in df.columns and pd.notna(row.get("Amount")) else None,
-                        "change": change,
-                        "change_percent": change_pct,
-                        "turnover_rate": float(row["TurnoverRate"]) if "TurnoverRate" in df.columns and pd.notna(row.get("TurnoverRate")) else None,
-                    }
-                )
-                prev_close = close
-            return candles
-        except Exception as exc:
-            last_exc = exc
-            continue
-
-    if last_exc:
-        _log(f"[kline] index fetch failed for {symbol}: {type(last_exc).__name__}: {last_exc}")
-    return []
+    df = load_index_daily_df(symbol_key)
+    if df.empty:
+        return []
+    df = df[
+        (df["trade_date"] >= pd.to_datetime(start_date))
+        & (df["trade_date"] <= pd.to_datetime(end_date))
+    ]
+    if df.empty:
+        return []
+    candles: List[Dict[str, Any]] = []
+    prev_close: float | None = None
+    for _, row in df.iterrows():
+        close = float(row["close"])
+        change = close - prev_close if prev_close is not None else None
+        change_pct = ((change / prev_close) * 100) if prev_close not in (None, 0) and change is not None else None
+        candles.append(
+            {
+                "date": row["trade_date"].strftime("%Y-%m-%d"),
+                "open": float(row["open"]),
+                "high": float(row["high"]),
+                "low": float(row["low"]),
+                "close": close,
+                "volume": float(row["volume"]) if pd.notna(row.get("volume")) else None,
+                "amount": float(row["amount"]) if pd.notna(row.get("amount")) else None,
+                "change": change,
+                "change_percent": change_pct,
+                "turnover_rate": None,
+            }
+        )
+        prev_close = close
+    return candles
 
 
 async def _stream_job_events(job_id: str):
@@ -2449,106 +2456,16 @@ def _normalize_ths_code(code: str) -> str:
 
 @app.get("/v1/market/hot-stocks")
 def get_hot_stocks(source: str = "em", limit: int = 30) -> Dict:
-    """Return hot A-share stocks from different sources.
-    
-    Args:
-        source: Data source selection
-            - 'em': 东方财富热榜 (EastMoney hot stocks)
-            - 'xq': 雪球热门 (Xueqiu most-followed stocks)
-            - 'ths': 连涨榜 (Consecutive rising stocks, not general hot list)
-        limit: Maximum number of stocks to return
-    
-    Returns:
-        Dict with stocks list, total count, source info, and fallback status
-    """
-    import akshare as ak
-
-    # 定义数据源尝试顺序（如果主数据源失败，自动尝试备用源）
-    source_configs = {
-        "em": ("stock_hot_rank_em", None, "东方财富热榜"),
-        "xq": ("stock_hot_follow_xq", "最热门", "雪球热门"),
-        "ths": ("stock_rank_lxsz_ths", None, "连涨榜"),
+    """Placeholder hot-stocks endpoint for the xbx local-data branch."""
+    _log(f"Hot stocks requested with source={source}, limit={limit}; xbx branch returns local placeholder.")
+    return {
+        "stocks": [],
+        "total": 0,
+        "source": "xbx_local",
+        "requested_source": source,
+        "fallback": False,
+        "message": "当前 xbxdata 本地分支未接入在线热股榜。",
     }
-
-    if source not in source_configs:
-        raise HTTPException(status_code=400, detail=f"Unknown source: {source}")
-
-    # 尝试主数据源，失败则尝试其他源
-    sources_to_try = [source] + [s for s in ["xq", "em", "ths"] if s != source]
-    last_error = None
-
-    for src in sources_to_try:
-        try:
-            func_name, param, desc = source_configs[src]
-            func = getattr(ak, func_name)
-
-            # 调用 akshare 函数
-            if param:
-                df = func(symbol=param).head(limit)
-            else:
-                df = func().head(limit)
-
-            stocks = []
-
-            if src == "em":
-                for i, (_, row) in enumerate(df.iterrows()):
-                    stocks.append({
-                        "rank": i + 1,
-                        "symbol": _normalize_ths_code(str(row.get("代码", ""))),
-                        "name": str(row.get("股票名称", "")),
-                        "price": float(row.get("最新价", 0) or 0),
-                        "change": float(row.get("涨跌额", 0) or 0),
-                        "change_pct": float(row.get("涨跌幅", 0) or 0),
-                        "extra": "",
-                    })
-
-            elif src == "xq":
-                for i, (_, row) in enumerate(df.iterrows()):
-                    stocks.append({
-                        "rank": i + 1,
-                        "symbol": _normalize_ths_code(str(row.get("股票代码", ""))),
-                        "name": str(row.get("股票简称", "")),
-                        "price": float(row.get("最新价", 0) or 0),
-                        "change": 0.0,
-                        "change_pct": 0.0,
-                        "extra": f"关注 {int(row.get('关注', 0)):,}",
-                    })
-
-            elif src == "ths":
-                for i, (_, row) in enumerate(df.iterrows()):
-                    days = int(row.get("连涨天数", 0) or 0)
-                    change_pct = float(row.get("连续涨跌幅", 0) or 0)
-                    stocks.append({
-                        "rank": i + 1,
-                        "symbol": _normalize_ths_code(str(row.get("股票代码", ""))),
-                        "name": str(row.get("股票简称", "")),
-                        "price": float(row.get("收盘价", 0) or 0),
-                        "change": 0.0,
-                        "change_pct": change_pct,
-                        "extra": f"连涨{days}天",
-                    })
-
-            # 成功获取数据
-            fallback_msg = f" (fallback from {source_configs[source][2]})" if src != source else ""
-            _log(f"Hot stocks: successfully fetched from {desc}{fallback_msg}")
-            return {
-                "stocks": stocks,
-                "total": len(stocks),
-                "source": src,
-                "requested_source": source,
-                "fallback": src != source,
-            }
-
-        except Exception as e:
-            last_error = e
-            _log(f"Hot stocks: {desc} failed - {type(e).__name__}: {str(e)[:100]}")
-            continue
-
-    # 所有数据源都失败
-    raise HTTPException(
-        status_code=503,
-        detail=f"All data sources failed. Last error: {type(last_error).__name__}: {str(last_error)[:200]}"
-    )
 
 
 @app.post("/v1/analyze", response_model=AnalyzeResponse)
@@ -3223,7 +3140,7 @@ def delete_backtest(job_id: str) -> Dict:
 
 _CONFIG_ALLOWED_KEYS = {
     "llm_provider", "deep_think_llm", "quick_think_llm",
-    "backend_url", "max_debate_rounds", "max_risk_discuss_rounds",
+    "backend_url", "xbx_data_dir", "max_debate_rounds", "max_risk_discuss_rounds",
 }
 _CONFIG_MODEL_KEYS = ("llm_provider", "backend_url", "quick_think_llm", "deep_think_llm")
 _CONFIG_MODEL_LABELS = {
@@ -3441,12 +3358,43 @@ def _config_response_for_user(user: Optional[UserDB], db: Session) -> UserRuntim
         deep_think_llm=cfg["deep_think_llm"],
         quick_think_llm=cfg["quick_think_llm"],
         backend_url=cfg["backend_url"],
+        xbx_data_dir=cfg["xbx_data_dir"],
         max_debate_rounds=cfg["max_debate_rounds"],
         max_risk_discuss_rounds=cfg["max_risk_discuss_rounds"],
         has_api_key=bool(user_cfg and user_cfg.api_key_encrypted),
+        has_wecom_webhook=bool(user_cfg and user_cfg.wecom_webhook_encrypted),
         server_fallback_enabled=bool(cfg.get("server_fallback_enabled", True)),
-        email_report_enabled=user.email_report_enabled if user and hasattr(user, 'email_report_enabled') else True,
     )
+
+
+def _get_or_create_local_user(db: Session) -> UserDB:
+    user = auth_service.get_user_by_email(db, _LOCAL_USER_EMAIL)
+    now = datetime.now(timezone.utc)
+    if user:
+        user.last_login_at = now
+        user.updated_at = now
+        db.commit()
+        db.refresh(user)
+        return user
+    user = UserDB(
+        id=str(uuid4()),
+        email=_LOCAL_USER_EMAIL,
+        is_active=True,
+        created_at=now,
+        updated_at=now,
+        last_login_at=now,
+    )
+    db.add(user)
+    db.commit()
+    db.refresh(user)
+    return user
+
+
+@app.post("/v1/auth/bootstrap-local", response_model=AuthVerifyCodeResponse)
+def bootstrap_local_session(db: Session = Depends(get_db)):
+    user = _get_or_create_local_user(db)
+    access_token = auth_service.create_access_token(user)
+    return AuthVerifyCodeResponse(access_token=access_token, user=user)
 
 
 @app.post("/v1/auth/request-code")
@@ -3510,14 +3458,14 @@ def update_runtime_config(
         deep_think_llm=updates.deep_think_llm,
         quick_think_llm=updates.quick_think_llm,
         backend_url=updates.backend_url,
+        xbx_data_dir=updates.xbx_data_dir,
         max_debate_rounds=updates.max_debate_rounds,
         max_risk_discuss_rounds=updates.max_risk_discuss_rounds,
         api_key=updates.api_key,
+        wecom_webhook_url=updates.wecom_webhook_url,
         clear_api_key=updates.clear_api_key,
+        clear_wecom_webhook=updates.clear_wecom_webhook,
     )
-    if updates.email_report_enabled is not None:
-        current_user.email_report_enabled = updates.email_report_enabled
-        db.commit()
     current_cfg = _config_response_for_user(current_user, db)
     warmup_models = _warmup_model_names(current_cfg.model_dump())
     should_warmup = _should_trigger_config_warmup(before_cfg, current_cfg, updates)
@@ -3555,8 +3503,8 @@ def update_runtime_config(
         k: v
         for k, v in updates.model_dump().items()
         if v is not None
-        and k not in {"api_key", "warmup", "force_warmup"}
-        and (k in _CONFIG_ALLOWED_KEYS or (k == "clear_api_key" and bool(v)))
+        and k not in {"api_key", "wecom_webhook_url", "warmup", "force_warmup"}
+        and (k in _CONFIG_ALLOWED_KEYS or (k in {"clear_api_key", "clear_wecom_webhook"} and bool(v)))
     }
     return {
         "message": "用户配置已更新",

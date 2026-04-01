@@ -12,6 +12,7 @@ from uuid import uuid4
 
 from cryptography.fernet import Fernet, InvalidToken
 from jose import JWTError, jwt
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
 
 from api.database import EmailVerificationCodeDB, UserDB, UserLLMConfigDB
@@ -236,7 +237,14 @@ def send_login_code(email: str, code: str) -> Optional[str]:
 
 
 def get_user_llm_config(db: Session, user_id: str) -> Optional[UserLLMConfigDB]:
-    return db.query(UserLLMConfigDB).filter(UserLLMConfigDB.user_id == user_id).first()
+    try:
+        return db.query(UserLLMConfigDB).filter(UserLLMConfigDB.user_id == user_id).first()
+    except OperationalError as exc:
+        if "no such column" not in str(exc).lower():
+            raise
+        from api.database import init_db
+        init_db()
+        return db.query(UserLLMConfigDB).filter(UserLLMConfigDB.user_id == user_id).first()
 
 
 def upsert_user_llm_config(
@@ -247,10 +255,13 @@ def upsert_user_llm_config(
     backend_url: Optional[str] = None,
     quick_think_llm: Optional[str] = None,
     deep_think_llm: Optional[str] = None,
+    xbx_data_dir: Optional[str] = None,
     max_debate_rounds: Optional[int] = None,
     max_risk_discuss_rounds: Optional[int] = None,
     api_key: Optional[str] = None,
+    wecom_webhook_url: Optional[str] = None,
     clear_api_key: bool = False,
+    clear_wecom_webhook: bool = False,
 ) -> UserLLMConfigDB:
     row = get_user_llm_config(db, user_id)
     now = _utcnow()
@@ -266,6 +277,8 @@ def upsert_user_llm_config(
         row.quick_think_llm = quick_think_llm
     if deep_think_llm is not None:
         row.deep_think_llm = deep_think_llm
+    if xbx_data_dir is not None:
+        row.xbx_data_dir = xbx_data_dir
     if max_debate_rounds is not None:
         row.max_debate_rounds = max_debate_rounds
     if max_risk_discuss_rounds is not None:
@@ -275,6 +288,11 @@ def upsert_user_llm_config(
         row.api_key_encrypted = None
     elif api_key:
         row.api_key_encrypted = encrypt_secret(api_key)
+
+    if clear_wecom_webhook:
+        row.wecom_webhook_encrypted = None
+    elif wecom_webhook_url:
+        row.wecom_webhook_encrypted = encrypt_secret(wecom_webhook_url)
 
     row.updated_at = now
     db.commit()

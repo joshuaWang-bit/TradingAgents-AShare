@@ -13,7 +13,8 @@ DEFAULT_CONFIG = {
     "quick_think_llm": os.getenv("TA_LLM_QUICK", "gpt-4o-mini"),
     "backend_url": os.getenv("TA_BASE_URL", "https://api.openai.com/v1"),
     "api_key": os.getenv("TA_API_KEY", ""),
-    
+    "xbx_data_dir": os.getenv("TA_XBX_DATA_DIR", r"E:\STOCKDATA"),
+
     # Provider-specific thinking configuration
     "google_thinking_level": None,      # "high", "minimal", etc.
     "openai_reasoning_effort": None,    # "medium", "high", "low"
@@ -29,13 +30,15 @@ DEFAULT_CONFIG = {
     
     # Provider routing trace logs
     "provider_trace": os.getenv("TA_TRACE", "1").lower() in ("1", "true", "yes", "on"),
-    
+    "strict_data_vendors": os.getenv("TA_STRICT_DATA_VENDORS", "1").lower() in ("1", "true", "yes", "on"),
+
     # Data vendor configuration
     "data_vendors": {
-        "core_stock_apis": "cn_akshare,cn_baostock,yfinance",
-        "technical_indicators": "cn_akshare,cn_baostock,yfinance",
-        "fundamental_data": "cn_akshare,cn_baostock,yfinance",
-        "news_data": "cn_akshare,cn_baostock,yfinance",
+        "core_stock_apis": "cn_xbxdata",
+        "technical_indicators": "cn_xbxdata",
+        "fundamental_data": "cn_xbxdata",
+        "news_data": "cn_xbxdata",
+        "cn_market_data": "cn_xbxdata",
     },
     "tool_vendors": {},
 }

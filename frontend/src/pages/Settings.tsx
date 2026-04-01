@@ -1,7 +1,6 @@
 import { useState, useEffect, useMemo } from 'react'
-import { Save, Key, Database, Loader2, MessageSquare, User, Trash2, Link2, Copy, Plus, CheckCircle2, Mail, Flame, RefreshCw, Info } from 'lucide-react'
+import { Save, Key, Database, Loader2, MessageSquare, User, Trash2, Link2, Copy, Plus, CheckCircle2, Flame, RefreshCw, Info, Webhook } from 'lucide-react'
 import { api } from '@/services/api'
-import { useAuthStore } from '@/stores/authStore'
 import type { QmtImportState, RuntimeWarmupResult, UserToken } from '@/types'
 import { buildQmtSyncSummary } from '@/utils/qmtSync'
 
@@ -40,7 +39,6 @@ function inferPreset(llmProvider: string, backendUrl: string): string {
 }
 
 export default function Settings() {
-    const { user } = useAuthStore()
     const [defaultAnalysts, setDefaultAnalysts] = useState(['market', 'social', 'news', 'fundamentals', 'macro', 'smart_money'])
     const [customPrompt, setCustomPrompt] = useState('')
     const [llmApiKey, setLlmApiKey] = useState('')
@@ -50,10 +48,12 @@ export default function Settings() {
     const [customBaseUrl, setCustomBaseUrl] = useState('')
     const [deepThinkLlm, setDeepThinkLlm] = useState('')
     const [quickThinkLlm, setQuickThinkLlm] = useState('')
+    const [xbxDataDir, setXbxDataDir] = useState('E:\\STOCKDATA')
+    const [wecomWebhook, setWecomWebhook] = useState('')
+    const [hasStoredWebhook, setHasStoredWebhook] = useState(false)
     const [maxDebateRounds, setMaxDebateRounds] = useState(1)
     const [maxRiskRounds, setMaxRiskRounds] = useState(1)
     const [serverFallbackEnabled, setServerFallbackEnabled] = useState(true)
-    const [emailReportEnabled, setEmailReportEnabled] = useState(true)
     const [qmtImportState, setQmtImportState] = useState<QmtImportState | null>(null)
     const [qmtLoading, setQmtLoading] = useState(false)
     const [qmtSyncing, setQmtSyncing] = useState(false)
@@ -121,11 +121,12 @@ export default function Settings() {
                 setCustomBaseUrl(cfg.backend_url || '')
                 setDeepThinkLlm(cfg.deep_think_llm)
                 setQuickThinkLlm(cfg.quick_think_llm)
+                setXbxDataDir(cfg.xbx_data_dir || 'E:\\STOCKDATA')
                 setMaxDebateRounds(cfg.max_debate_rounds)
                 setMaxRiskRounds(cfg.max_risk_discuss_rounds)
                 setHasStoredApiKey(!!cfg.has_api_key)
+                setHasStoredWebhook(!!cfg.has_wecom_webhook)
                 setServerFallbackEnabled(!!cfg.server_fallback_enabled)
-                setEmailReportEnabled(cfg.email_report_enabled !== false)
             })
             .catch(err => {
                 setConfigError(err instanceof Error ? err.message : '无法连接到后端')
@@ -205,15 +206,16 @@ export default function Settings() {
         localStorage.setItem('ta-custom-prompt', customPrompt)
     }
 
-    const buildRuntimeConfigPayload = (options?: { includeEmail?: boolean }) => ({
+    const buildRuntimeConfigPayload = () => ({
         llm_provider: effectiveProvider,
         backend_url: effectiveBaseUrl || undefined,
         deep_think_llm: deepThinkLlm,
         quick_think_llm: quickThinkLlm,
+        xbx_data_dir: xbxDataDir.trim(),
         max_debate_rounds: maxDebateRounds,
         max_risk_discuss_rounds: maxRiskRounds,
         api_key: llmApiKey || undefined,
-        ...(options?.includeEmail ? { email_report_enabled: emailReportEnabled } : {}),
+        wecom_webhook_url: wecomWebhook || undefined,
     })
 
     const showSavedMessage = (message: string) => {
@@ -245,16 +247,18 @@ export default function Settings() {
         }
     }
 
-    const submitConfig = async (options?: { forceWarmup?: boolean; successMessage?: string; includeEmail?: boolean }) => {
+    const submitConfig = async (options?: { forceWarmup?: boolean; successMessage?: string }) => {
         persistLocalSettings()
-        const { forceWarmup = false, successMessage = '设置已保存', includeEmail = true } = options || {}
+        const { forceWarmup = false, successMessage = '设置已保存' } = options || {}
         const response = await api.updateConfig({
-            ...buildRuntimeConfigPayload({ includeEmail }),
+            ...buildRuntimeConfigPayload(),
             warmup: true,
             force_warmup: forceWarmup,
         })
         setHasStoredApiKey(!!response.has_api_key)
+        setHasStoredWebhook(!!response.current.has_wecom_webhook)
         setLlmApiKey('')
+        setWecomWebhook('')
         showSavedMessage(response.warmup?.message || successMessage)
         return response
     }
@@ -262,7 +266,7 @@ export default function Settings() {
     const handleSaveModel = async () => {
         setModelSaving(true)
         try {
-            await submitConfig({ includeEmail: false, successMessage: '模型配置已保存' })
+            await submitConfig({ successMessage: '模型配置已保存' })
         } catch (err) {
             alert(err instanceof Error ? err.message : '保存模型配置失败')
         } finally {
@@ -276,7 +280,7 @@ export default function Settings() {
             if (hasAnyQmtInput() && !shouldSyncQmt()) {
                 throw new Error('如需一并保存 QMT，请同时填写 QMT userdata 路径和资金账号')
             }
-            await submitConfig({ includeEmail: true, successMessage: '全部设置已保存' })
+            await submitConfig({ successMessage: '全部设置已保存' })
             if (shouldSyncQmt()) {
                 await syncQmtImport({ successMessage: '全部设置已保存' })
             } else {
@@ -321,6 +325,21 @@ export default function Settings() {
         }
     }
 
+    const handleClearWebhook = async () => {
+        if (!hasStoredWebhook) return
+        setSaving(true)
+        try {
+            const response = await api.updateConfig({ clear_wecom_webhook: true })
+            setHasStoredWebhook(!!response.current.has_wecom_webhook)
+            setWecomWebhook('')
+            showSavedMessage('企业微信机器人已清除')
+        } catch (err) {
+            alert(err instanceof Error ? err.message : '清除企业微信机器人失败')
+        } finally {
+            setSaving(false)
+        }
+    }
+
     const handleSaveQmt = async () => {
         try {
             await syncQmtImport({ successMessage: 'QMT 配置已保存' })
@@ -349,17 +368,17 @@ export default function Settings() {
         <div className="space-y-6">
             <div>
                 <h1 className="text-2xl font-bold text-slate-900 dark:text-slate-100">系统设置</h1>
-                <p className="text-slate-500 dark:text-slate-400 mt-1">配置当前账户的分析参数、模型与 QMT 持仓同步</p>
+                <p className="text-slate-500 dark:text-slate-400 mt-1">配置本地工作区的 xbx 数据目录、模型接入、企业微信通知与 QMT 持仓同步</p>
             </div>
 
             <div className="card space-y-3">
                 <div className="flex items-center gap-2">
                     <User className="w-5 h-5 text-cyan-500" />
-                    <h2 className="text-lg font-semibold text-slate-900 dark:text-slate-100">账户空间</h2>
+                    <h2 className="text-lg font-semibold text-slate-900 dark:text-slate-100">工作区</h2>
                 </div>
                 <div className="text-sm text-slate-600 dark:text-slate-300">
-                    <div>当前登录：{user?.email || '-'}</div>
-                    <div className="mt-1 text-slate-500 dark:text-slate-400">报告历史、分析任务和模型配置仅当前账户可见。</div>
+                    <div>当前模式：本地单机工作区</div>
+                    <div className="mt-1 text-slate-500 dark:text-slate-400">报告历史、分析任务和模型配置保存在当前本地研究空间中。</div>
                 </div>
             </div>
 
@@ -381,7 +400,7 @@ export default function Settings() {
                                 一般来说，如果你开通了量化交易，你应该会知道 QMT 是什么。
                             </div>
                             <div className="mt-2">
-                                如果你正在使用大 QMT，请在登录页勾选“独立交易”，进入的就是 QMT Mini。
+                                如果你正在使用大 QMT，请切换到独立交易模式，进入的就是 QMT Mini。
                             </div>
                             <div className="mt-2">
                                 如果你不知道这是什么，可以咨询你的券商客户经理开通量化交易。
@@ -488,7 +507,7 @@ export default function Settings() {
             <div className="card space-y-4">
                 <div className="flex items-center gap-2">
                     <Database className="w-5 h-5 text-purple-500" />
-                    <h2 className="text-lg font-semibold text-slate-900 dark:text-slate-100">模型接入</h2>
+                    <h2 className="text-lg font-semibold text-slate-900 dark:text-slate-100">xbx 数据与模型接入</h2>
                     <div className="ml-auto flex items-center gap-3">
                         {configLoading && <Loader2 className="w-4 h-4 animate-spin text-slate-400" />}
                         <button
@@ -508,6 +527,23 @@ export default function Settings() {
                 )}
 
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div className="md:col-span-2">
+                        <label className="block text-sm font-medium text-slate-600 dark:text-slate-400 mb-2">
+                            xbx 数据目录
+                        </label>
+                        <input
+                            type="text"
+                            value={xbxDataDir}
+                            onChange={e => setXbxDataDir(e.target.value)}
+                            className="input w-full"
+                            placeholder="例如：E:\\STOCKDATA"
+                            disabled={configLoading}
+                        />
+                        <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                            当前分支默认从 xbx 本地数据目录取数，不再走 akshare。
+                        </p>
+                    </div>
+
                     <div>
                         <label className="block text-sm font-medium text-slate-600 dark:text-slate-400 mb-2">
                             模型厂商
@@ -621,6 +657,39 @@ export default function Settings() {
                         <p className="mt-2 text-xs text-slate-500 dark:text-slate-400">
                             保存模型配置后，系统会在后台自动 warmup 当前模型；也可以直接在这里点击 warmup，默认发送“你好”并查看模型原始回复。
                         </p>
+                    </div>
+
+                    <div className="md:col-span-2">
+                        <label className="block text-sm font-medium text-slate-600 dark:text-slate-400 mb-2">
+                            企业微信机器人 Webhook
+                        </label>
+                        <div className="relative">
+                            <Webhook className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+                            <input
+                                type="text"
+                                value={wecomWebhook}
+                                onChange={e => setWecomWebhook(e.target.value)}
+                                className="input w-full pl-10"
+                                placeholder={hasStoredWebhook ? '已保存，留空则保持不变' : '可选：粘贴企业微信机器人 Webhook'}
+                                disabled={configLoading}
+                            />
+                        </div>
+                        <div className="mt-2 flex flex-wrap items-center justify-between gap-3">
+                            <div className="text-xs text-slate-500 dark:text-slate-400">
+                                定时分析完成后会把摘要发送到企业微信机器人；留空则不发送。
+                            </div>
+                            {hasStoredWebhook && (
+                                <button
+                                    type="button"
+                                    onClick={handleClearWebhook}
+                                    disabled={saving || modelSaving || saveAllSaving}
+                                    className="inline-flex items-center gap-1 text-xs text-rose-500 hover:text-rose-600 disabled:opacity-50"
+                                >
+                                    <Trash2 className="w-3.5 h-3.5" />
+                                    清除机器人
+                                </button>
+                            )}
+                        </div>
                     </div>
 
                     <div>
@@ -829,28 +898,14 @@ export default function Settings() {
 
             <div className="card space-y-3">
                 <div className="flex items-center gap-2">
-                    <Mail className="w-5 h-5 text-blue-500" />
-                    <h2 className="text-lg font-semibold text-slate-900 dark:text-slate-100">邮件报告推送</h2>
+                    <Webhook className="w-5 h-5 text-blue-500" />
+                    <h2 className="text-lg font-semibold text-slate-900 dark:text-slate-100">通知方式</h2>
                 </div>
-                <div className="flex items-center justify-between">
-                    <div>
-                        <div className="text-sm text-slate-600 dark:text-slate-300">定时分析完成时自动发送报告到邮箱</div>
-                        <div className="text-xs text-slate-400 dark:text-slate-500 mt-1">发送至 {user?.email || '-'}</div>
+                <div className="text-sm text-slate-600 dark:text-slate-300">
+                    <div>当前分支已停用邮箱推送，改为企业微信机器人摘要通知。</div>
+                    <div className="text-xs text-slate-400 dark:text-slate-500 mt-1">
+                        {hasStoredWebhook ? '企业微信机器人已配置' : '尚未配置企业微信机器人'}
                     </div>
-                    <button
-                        type="button"
-                        onClick={() => setEmailReportEnabled(!emailReportEnabled)}
-                        disabled={configLoading}
-                        className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
-                            emailReportEnabled ? 'bg-blue-500' : 'bg-slate-300 dark:bg-slate-600'
-                        }`}
-                    >
-                        <span
-                            className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
-                                emailReportEnabled ? 'translate-x-6' : 'translate-x-1'
-                            }`}
-                        />
-                    </button>
                 </div>
             </div>
 
