@@ -446,9 +446,8 @@ async def lifespan(app: FastAPI):
         report_reset = report_service.recover_stale_active_reports(db)
         if report_reset["total"]:
             _log(
-                "[Reports] Recovered %s stale active reports on startup "
-                "(completed=%s, failed=%s)."
-                % (report_reset["total"], report_reset["completed"], report_reset["failed"])
+                "[Reports] Recovered %s stale active reports on startup (marked failed)."
+                % report_reset["total"]
             )
     # Pre-load trade calendar (uses mini_racer/V8 which is not thread-safe)
     from tradingagents.dataflows.trade_calendar import _load_cn_trade_dates
@@ -652,6 +651,8 @@ def _resolve_watchlist_identifier(
     if symbol in code_to_name:
         return symbol, code_to_name.get(symbol, symbol), None
     return None, None, f"未识别的股票代码或名称: {token}"
+
+
 _auth_scheme = HTTPBearer(auto_error=False)
 
 FIXED_TEAMS = {
@@ -878,6 +879,10 @@ class ReportListResponse(BaseModel):
     reports: List[ReportResponse]
 
 
+class ReportBatchDeleteRequest(BaseModel):
+    report_ids: List[str] = Field(default_factory=list)
+
+
 class ReportBatchDeleteResponse(BaseModel):
     deleted_ids: List[str]
     missing_ids: List[str]
@@ -896,6 +901,22 @@ class PortfolioOverviewResponse(BaseModel):
     scheduled: List[dict]
     latest_reports: List[ReportResponse]
     qmt_import: Optional[dict] = None
+
+
+class WatchlistAddRequest(BaseModel):
+    text: Optional[str] = None
+    symbol: Optional[str] = None
+
+
+class ScheduledBatchIdsRequest(BaseModel):
+    item_ids: List[str] = Field(default_factory=list)
+
+
+class ScheduledBatchUpdateRequest(BaseModel):
+    item_ids: List[str] = Field(default_factory=list)
+    is_active: Optional[bool] = None
+    horizon: Optional[str] = None
+    trigger_time: Optional[str] = None
 
 
 class AnnouncementItemResponse(BaseModel):
@@ -3356,15 +3377,12 @@ def delete_report_endpoint(
 
 @app.post("/v1/reports/batch/delete", response_model=ReportBatchDeleteResponse)
 def batch_delete_reports_endpoint(
-    body: dict,
+    body: ReportBatchDeleteRequest,
     db: Session = Depends(get_db),
     current_user: UserDB = Depends(_require_api_user),
 ):
-    report_ids = body.get("report_ids") or []
-    if not isinstance(report_ids, list):
-        raise HTTPException(400, "report_ids 必须为数组")
     try:
-        return report_service.batch_delete_reports(db, report_ids, user_id=current_user.id)
+        return report_service.batch_delete_reports(db, body.report_ids, user_id=current_user.id)
     except ValueError as e:
         raise HTTPException(400, str(e))
 
@@ -4084,11 +4102,11 @@ def list_watchlist(
 
 @app.post("/v1/watchlist")
 def add_to_watchlist(
-    body: dict,
+    body: WatchlistAddRequest,
     current_user: UserDB = Depends(_require_api_user),
     db: Session = Depends(get_db),
 ):
-    text = str(body.get("text") or body.get("symbol") or "").strip()
+    text = str(body.text or body.symbol or "").strip()
     if not text:
         raise HTTPException(400, "text or symbol is required")
 
@@ -4251,21 +4269,18 @@ def _extract_scheduled_update_kwargs(body: dict) -> dict:
 
 @app.patch("/v1/scheduled/batch")
 def batch_update_scheduled_analyses(
-    body: dict,
+    body: ScheduledBatchUpdateRequest,
     current_user: UserDB = Depends(_require_api_user),
     db: Session = Depends(get_db),
 ):
-    item_ids = body.get("item_ids") or []
-    if not isinstance(item_ids, list):
-        raise HTTPException(400, "item_ids 必须为数组")
-    kwargs = _extract_scheduled_update_kwargs(body)
+    kwargs = _extract_scheduled_update_kwargs(body.model_dump(exclude_unset=True))
     if not kwargs:
         raise HTTPException(400, "至少提供一个更新字段")
     try:
         items = scheduled_service.batch_update_scheduled(
             db,
             current_user.id,
-            item_ids,
+            body.item_ids,
             **kwargs,
         )
     except ValueError as e:
@@ -4278,29 +4293,23 @@ def batch_update_scheduled_analyses(
 
 @app.post("/v1/scheduled/batch/delete")
 def batch_delete_scheduled_analyses(
-    body: dict,
+    body: ScheduledBatchIdsRequest,
     current_user: UserDB = Depends(_require_api_user),
     db: Session = Depends(get_db),
 ):
-    item_ids = body.get("item_ids") or []
-    if not isinstance(item_ids, list):
-        raise HTTPException(400, "item_ids 必须为数组")
     try:
-        return scheduled_service.batch_delete_scheduled(db, current_user.id, item_ids)
+        return scheduled_service.batch_delete_scheduled(db, current_user.id, body.item_ids)
     except ValueError as e:
         raise HTTPException(400, str(e))
 
 
 @app.post("/v1/scheduled/batch/trigger", response_model=BatchScheduledTriggerResponse)
 async def trigger_scheduled_analyses_batch(
-    body: dict,
+    body: ScheduledBatchIdsRequest,
     current_user: UserDB = Depends(_require_api_user),
     db: Session = Depends(get_db),
 ):
-    item_ids = body.get("item_ids") or []
-    if not isinstance(item_ids, list):
-        raise HTTPException(400, "item_ids 必须为数组")
-    if not item_ids:
+    if not body.item_ids:
         raise HTTPException(400, "请至少选择 1 个定时任务")
 
     requested_trade_date = cn_today_str()
@@ -4314,7 +4323,7 @@ async def trigger_scheduled_analyses_batch(
     }
     valid_item_ids = []
     missing_item_ids = []
-    for raw_item_id in item_ids:
+    for raw_item_id in body.item_ids:
         item_id = str(raw_item_id or "").strip()
         if not item_id:
             continue

@@ -335,7 +335,7 @@ def recover_stale_active_reports(
         .all()
     )
     if not rows:
-        return {"total": 0, "completed": 0, "failed": 0}
+        return {"total": 0, "failed": 0}
 
     failed = 0
     changed = False
@@ -354,7 +354,6 @@ def recover_stale_active_reports(
 
     return {
         "total": failed,
-        "completed": 0,
         "failed": failed,
     }
 

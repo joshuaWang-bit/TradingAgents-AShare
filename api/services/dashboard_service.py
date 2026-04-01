@@ -17,8 +17,13 @@ from tradingagents.dataflows.trade_calendar import cn_today_str, previous_cn_tra
 
 REFRESH_INTERVAL_SECONDS = 20
 QUOTE_REQUEST_TIMEOUT_SECONDS = max(0.5, float(os.getenv("TA_TRACKING_QUOTE_TIMEOUT_SECONDS", "2.5")))
-ENABLE_XQ_QUOTE_FALLBACK = os.getenv("TA_TRACKING_ENABLE_XQ_FALLBACK", "").strip().lower() in ("1", "true", "yes", "on")
+ENABLE_SINGLE_QUOTE_FALLBACK = os.getenv("TA_TRACKING_ENABLE_XQ_FALLBACK", "").strip().lower() in ("1", "true", "yes", "on")
+_SINA_QUOTE_CACHE_TTL = 8  # seconds – avoid hammering Sina on concurrent requests
 logger = logging.getLogger(__name__)
+
+# Simple TTL cache for Sina batch quotes to avoid IP bans under concurrent load.
+_sina_quote_cache: dict[str, dict[str, Any]] = {}
+_sina_quote_cache_ts: float = 0.0
 
 
 def get_tracking_board(db: Session, user_id: str) -> dict[str, Any]:
@@ -229,9 +234,9 @@ def _fetch_live_quotes(
     fallback_quotes = _fetch_em_batch_quotes(missing)
     quotes.update(fallback_quotes)
     missing = [symbol for symbol in symbols if symbol not in quotes]
-    if ENABLE_XQ_QUOTE_FALLBACK:
+    if ENABLE_SINGLE_QUOTE_FALLBACK:
         for symbol in missing:
-            quote = _fetch_xq_quote(symbol)
+            quote = _fetch_sina_single_quote(symbol)
             if quote:
                 quotes[symbol] = quote
     return quotes
@@ -277,6 +282,8 @@ def _fetch_qmt_quotes(symbols: list[str]) -> dict[str, dict[str, Any]]:
             except Exception as exc:
                 logger.warning("[tracking-board] xtdata subscribe_quote failed for %s: %s", symbol, exc)
         if subscription_ids:
+            # Blocking sleep is acceptable here: the endpoint is sync def,
+            # so FastAPI runs it in a threadpool and won't block the event loop.
             time.sleep(0.35)
 
         try:
@@ -375,7 +382,20 @@ def _to_iso_datetime(value: Any) -> str | None:
 
 
 def _fetch_em_batch_quotes(symbols: list[str]) -> dict[str, dict[str, Any]]:
-    sina_symbols = [_to_sina_symbol(symbol) for symbol in symbols if _to_sina_symbol(symbol)]
+    global _sina_quote_cache, _sina_quote_cache_ts
+
+    normalized = [s.strip().upper() for s in symbols if s and s.strip()]
+    if not normalized:
+        return {}
+
+    # Return cached results if still fresh
+    now = time.time()
+    if (now - _sina_quote_cache_ts) < _SINA_QUOTE_CACHE_TTL and _sina_quote_cache:
+        cached = {s: _sina_quote_cache[s] for s in normalized if s in _sina_quote_cache}
+        if len(cached) == len(normalized):
+            return cached
+
+    sina_symbols = [_to_sina_symbol(s) for s in normalized if _to_sina_symbol(s)]
     if not sina_symbols:
         return {}
     try:
@@ -390,13 +410,13 @@ def _fetch_em_batch_quotes(symbols: list[str]) -> dict[str, dict[str, Any]]:
         response.raise_for_status()
         response.encoding = "gbk"
     except Exception as exc:
-        logger.warning("[tracking-board] Batch quote fetch failed for %s: %s", symbols, exc)
+        logger.warning("[tracking-board] Batch quote fetch failed for %s: %s", normalized, exc)
         return {}
 
     symbol_by_sina = {
-        _to_sina_symbol(symbol): str(symbol or "").strip().upper()
-        for symbol in symbols
-        if _to_sina_symbol(symbol)
+        _to_sina_symbol(s): s
+        for s in normalized
+        if _to_sina_symbol(s)
     }
     quotes: dict[str, dict[str, Any]] = {}
     for line in response.text.splitlines():
@@ -407,10 +427,15 @@ def _fetch_em_batch_quotes(symbols: list[str]) -> dict[str, dict[str, Any]]:
         if not target_symbol:
             continue
         quotes[target_symbol] = quote
+
+    # Update cache
+    _sina_quote_cache.update(quotes)
+    _sina_quote_cache_ts = time.time()
     return quotes
 
 
-def _fetch_xq_quote(symbol: str) -> dict[str, Any] | None:
+def _fetch_sina_single_quote(symbol: str) -> dict[str, Any] | None:
+    """Fetch a single symbol's quote via Sina as a last-resort fallback."""
     return _fetch_em_batch_quotes([symbol]).get(str(symbol or "").strip().upper())
 
 
