@@ -1760,19 +1760,20 @@ async def _run_job_inner(
 
     # ── Step 0: Initialize report in DB (short-lived session) ──
     def _init_and_configure():
-        with get_db_ctx() as db:
-            try:
-                report_service.init_report(
-                    db=db,
-                    report_id=job_id,
-                    symbol=normalized_symbol,
-                    trade_date=request.trade_date,
-                    user_id=user_id,
-                )
-                report_service.update_report_partial(db, job_id, status="running")
-                db.commit()
-            except Exception as e:
-                _log(f"CRITICAL: Failed to initialize report in DB: {e}")
+        if save_report:
+            with get_db_ctx() as db:
+                try:
+                    report_service.init_report(
+                        db=db,
+                        report_id=job_id,
+                        symbol=normalized_symbol,
+                        trade_date=request.trade_date,
+                        user_id=user_id,
+                    )
+                    report_service.update_report_partial(db, job_id, status="running")
+                    db.commit()
+                except Exception as e:
+                    _log(f"CRITICAL: Failed to initialize report in DB: {e}")
         return _build_runtime_config(request.config_overrides, user_id=user_id)
 
     config = await asyncio.to_thread(_init_and_configure)
@@ -1991,7 +1992,7 @@ async def _run_job_inner(
                                 db_updates[key] = str(value)
                                 h_tracker._emit_report_chunked(job_id, key, str(value))
 
-                        if db_updates:
+                        if save_report and db_updates:
                             await asyncio.to_thread(_horizon_partial_update, db_updates)
                 except Exception as e:
                     _log(f"Error during horizon streaming ({horizon}): {e}")
@@ -2202,7 +2203,7 @@ async def _run_job_inner(
                             # 立即推送报告分片，前端即可“即产即看”
                             tracker._emit_report_chunked(job_id, key, str(value))
                     
-                    if db_updates:
+                    if save_report and db_updates:
                         def _partial_update(updates=db_updates):
                             with get_db_ctx() as _db:
                                 report_service.update_report_partial(_db, job_id, **updates)
@@ -2366,13 +2367,14 @@ async def _run_job_inner(
         )
         
         # ── Persistent failure recording (short-lived session) ──
-        try:
-            def _record_failure():
-                with get_db_ctx() as err_db:
-                    report_service.mark_report_failed(err_db, job_id, f"{err_msg}\n\n{traceback.format_exc()}")
-            await asyncio.to_thread(_record_failure)
-        except Exception as db_exc:
-            _log(f"Failed to record failure in DB: {db_exc}")
+        if save_report:
+            try:
+                def _record_failure():
+                    with get_db_ctx() as err_db:
+                        report_service.mark_report_failed(err_db, job_id, f"{err_msg}\n\n{traceback.format_exc()}")
+                await asyncio.to_thread(_record_failure)
+            except Exception as db_exc:
+                _log(f"Failed to record failure in DB: {db_exc}")
 
         _emit_job_event(
             job_id,
@@ -2851,10 +2853,10 @@ async def analyze(
         {"job_id": job_id, "symbol": request.symbol, "trade_date": request.trade_date},
     )
     if request.dry_run:
-        await _run_job(job_id, request, True, True, current_user.id, "api")
+        await _run_job(job_id, request, True, False, current_user.id, "api")
         final_status = _jobs.get(job_id, {}).get("status", "completed")
         return AnalyzeResponse(job_id=job_id, status=final_status, created_at=now)
-    _create_tracked_task(_run_job(job_id, request, True, True, current_user.id, "api"))
+    _create_tracked_task(_run_job(job_id, request, True, False, current_user.id, "api"))
     return AnalyzeResponse(job_id=job_id, status="pending", created_at=now)
 
 
@@ -3193,7 +3195,7 @@ async def chat_completions(
                     "job.created",
                     {"job_id": job_id, "symbol": analyze_req.symbol, "trade_date": analyze_req.trade_date},
                 )
-                await _run_job(job_id, analyze_req, True, True, current_user.id, "chat")
+                await _run_job(job_id, analyze_req, True, False, current_user.id, "chat")
             except Exception as exc:
                 _log(f"[chat] _extract_and_run failed: {exc}")
                 _emit_job_event(job_id, "job.failed", {"error": str(exc)})
@@ -3271,7 +3273,7 @@ async def chat_completions(
         {"job_id": job_id, "symbol": analyze_req.symbol, "trade_date": analyze_req.trade_date},
     )
     if request.dry_run:
-        await _run_job(job_id, analyze_req, True, True, current_user.id, "chat")
+        await _run_job(job_id, analyze_req, True, False, current_user.id, "chat")
         status_text = _jobs.get(job_id, {}).get("status", "completed")
         decision_text = _jobs.get(job_id, {}).get("decision", "DRY_RUN")
         return {
@@ -3294,7 +3296,7 @@ async def chat_completions(
                 }
             ],
         }
-    _create_tracked_task(_run_job(job_id, analyze_req, True, True, current_user.id, "chat"))
+    _create_tracked_task(_run_job(job_id, analyze_req, True, False, current_user.id, "chat"))
     return {
         "id": f"chatcmpl-{job_id}",
         "object": "chat.completion",

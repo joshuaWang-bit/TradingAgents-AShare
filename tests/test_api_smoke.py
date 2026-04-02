@@ -17,7 +17,7 @@ import pytest
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
-from api.database import ImportedPortfolioPositionDB, QmtImportConfigDB, get_db_ctx
+from api.database import ImportedPortfolioPositionDB, QmtImportConfigDB, ReportDB, get_db_ctx
 
 
 # ---------------------------------------------------------------------------
@@ -174,6 +174,19 @@ class TestAnalyzeEndpoint:
         now = datetime.now(timezone.utc)
 
         with get_db_ctx() as db:
+            db.query(ImportedPortfolioPositionDB).filter(
+                ImportedPortfolioPositionDB.user_id == current_user["id"],
+                ImportedPortfolioPositionDB.source == "qmt_xtquant",
+            ).delete()
+            db.query(QmtImportConfigDB).filter(QmtImportConfigDB.user_id == current_user["id"]).delete()
+            existing_reports = (
+                db.query(ReportDB)
+                .filter(
+                    ReportDB.user_id == current_user["id"],
+                    ReportDB.symbol == "600519.SH",
+                )
+                .count()
+            )
             db.add(
                 QmtImportConfigDB(
                     id=uuid4().hex,
@@ -217,6 +230,16 @@ class TestAnalyzeEndpoint:
         assert user_context["average_cost"] == pytest.approx(1680.5)
         assert user_context["current_position_pct"] == pytest.approx(42.5)
         assert "QMT / xtquant 持仓同步" in (user_context.get("user_notes") or "")
+        with get_db_ctx() as db:
+            saved_reports = (
+                db.query(ReportDB)
+                .filter(
+                    ReportDB.user_id == current_user["id"],
+                    ReportDB.symbol == "600519.SH",
+                )
+                .count()
+            )
+        assert saved_reports == existing_reports
 
 
 class TestChatCompletionsEndpoint:
