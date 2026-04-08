@@ -4577,6 +4577,151 @@ def delete_scheduled_analysis(
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 
+# ─── Data Preload API ───────────────────────────────────────────────────────
+
+class DataPreloadStatusResponse(BaseModel):
+    is_running: bool
+    current_operation: Optional[Dict[str, Any]]
+    cache_path: Optional[str]
+    cached_symbols: int
+    stale_symbols: int
+    max_age_hours: int
+    latest_preload: Optional[Dict[str, Any]]
+
+
+class DataPreloadTriggerResponse(BaseModel):
+    success: bool
+    operation_id: Optional[str]
+    message: str
+    total_symbols: int
+    error: Optional[str] = None
+
+
+class DataAvailabilityResponse(BaseModel):
+    symbol: str
+    trade_date: str
+    freshness: str
+    has_price_data: bool
+    has_fundamentals: bool
+    has_news: bool
+    record_count: int
+    last_updated: Optional[str]
+    ready_for_analysis: bool
+
+
+class DataSourceInfoResponse(BaseModel):
+    current_source: Optional[str]
+    available_sources: List[Dict[str, Any]]
+
+
+@app.get("/v1/data/status", response_model=DataPreloadStatusResponse)
+async def get_data_status():
+    """Get data preload status."""
+    from api.services.preload_service import get_preload_service
+    
+    service = get_preload_service()
+    status = service.get_status()
+    
+    return DataPreloadStatusResponse(
+        is_running=status.get("is_running", False),
+        current_operation=status.get("current_operation"),
+        cache_path=status.get("cache_path"),
+        cached_symbols=status.get("cached_symbols", 0),
+        stale_symbols=status.get("stale_symbols", 0),
+        max_age_hours=status.get("max_age_hours", 24),
+        latest_preload=status.get("latest_preload"),
+    )
+
+
+@app.post("/v1/data/preload", response_model=DataPreloadTriggerResponse)
+async def trigger_data_preload(
+    symbols: Optional[List[str]] = None,
+    trade_date: Optional[str] = None,
+    current_user: UserDB = Depends(get_current_user),
+):
+    """Manually trigger data preloading.
+    
+    If symbols is not provided, preloads data for all watchlist and scheduled symbols.
+    """
+    from api.services.preload_service import get_preload_service
+    
+    service = get_preload_service()
+    
+    if service.is_running():
+        return DataPreloadTriggerResponse(
+            success=False,
+            operation_id=None,
+            message="Another preload operation is already running",
+            total_symbols=0,
+            error="Already running",
+        )
+    
+    # Start preload in background
+    async def do_preload():
+        result = await service.run_preload(symbols, trade_date)
+        if result.get("success"):
+            _log(f"[DataPreload] Completed: {result.get('success_count')}/{result.get('total')} symbols")
+        else:
+            _log(f"[DataPreload] Failed: {result.get('error')}")
+    
+    # Get symbol count for response
+    if symbols is None:
+        # Estimate count
+        with get_db_ctx() as db:
+            from api.database import WatchlistItemDB, ScheduledAnalysisDB
+            watchlist_count = db.query(WatchlistItemDB).distinct(WatchlistItemDB.symbol).count()
+            scheduled_count = db.query(ScheduledAnalysisDB).distinct(ScheduledAnalysisDB.symbol).count()
+            estimated_count = max(watchlist_count, scheduled_count, 10)
+    else:
+        estimated_count = len(symbols)
+    
+    # Start background task
+    _create_tracked_task(do_preload(), label="Data preload task")
+    
+    return DataPreloadTriggerResponse(
+        success=True,
+        operation_id=None,
+        message="Data preload started in background",
+        total_symbols=estimated_count,
+    )
+
+
+@app.get("/v1/data/availability/{symbol}", response_model=DataAvailabilityResponse)
+async def get_data_availability(
+    symbol: str,
+    trade_date: Optional[str] = None,
+):
+    """Check data availability for a specific symbol."""
+    from tradingagents.dataflows.interface import check_data_availability
+    
+    status = check_data_availability(symbol, trade_date)
+    
+    return DataAvailabilityResponse(
+        symbol=status["symbol"],
+        trade_date=status["trade_date"],
+        freshness=status["freshness"],
+        has_price_data=status["has_price_data"],
+        has_fundamentals=status["has_fundamentals"],
+        has_news=status["has_news"],
+        record_count=status["record_count"],
+        last_updated=status["last_updated"],
+        ready_for_analysis=status["ready_for_analysis"],
+    )
+
+
+@app.get("/v1/data/source", response_model=DataSourceInfoResponse)
+async def get_data_source_info_endpoint():
+    """Get information about the current data source."""
+    from tradingagents.dataflows.interface import get_data_source_info
+    
+    info = get_data_source_info()
+    
+    return DataSourceInfoResponse(
+        current_source=info.get("current_source"),
+        available_sources=info.get("available_sources", []),
+    )
+
+
 # ─── Static Files & SPA Routing ──────────────────────────────────────────────
 
 # Mount frontend if dist exists
