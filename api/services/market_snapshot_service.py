@@ -107,7 +107,11 @@ class MarketSnapshotService:
         return self._conn
     
     async def fetch_and_cache_daily_snapshot(self, trade_date: Optional[str] = None) -> Dict[str, Any]:
-        """Fetch and cache daily market snapshot from AkShare.
+        """Fetch and cache daily market snapshot from Tushare or AkShare.
+        
+        Priority:
+        1. Try Tushare first (if TUSHARE_TOKEN is set)
+        2. Fall back to AkShare if Tushare fails
         
         Args:
             trade_date: Trade date (YYYY-MM-DD). If None, uses current trading day.
@@ -145,12 +149,32 @@ class MarketSnapshotService:
             # Log start
             self._log_fetch_start(trade_date)
             
-            # Fetch data from AkShare in thread pool
+            # Try to fetch data
             loop = asyncio.get_event_loop()
-            df = await loop.run_in_executor(None, self._fetch_from_akshare)
+            df = None
+            data_source = "unknown"
+            
+            # Try Tushare first
+            if os.getenv("TUSHARE_TOKEN"):
+                try:
+                    logger.info("[MarketSnapshot] Trying Tushare...")
+                    df = await loop.run_in_executor(None, self._fetch_from_tushare, trade_date)
+                    data_source = "tushare"
+                except Exception as e:
+                    logger.warning(f"[MarketSnapshot] Tushare failed: {e}, falling back to AkShare")
+            
+            # Fall back to AkShare
+            if df is None or df.empty:
+                try:
+                    logger.info("[MarketSnapshot] Trying AkShare...")
+                    df = await loop.run_in_executor(None, self._fetch_from_akshare)
+                    data_source = "akshare"
+                except Exception as e:
+                    logger.error(f"[MarketSnapshot] AkShare also failed: {e}")
+                    raise
             
             if df is None or df.empty:
-                raise ValueError("No data returned from AkShare")
+                raise ValueError("No data returned from any source")
             
             # Cache to database
             record_count = await loop.run_in_executor(None, self._save_to_db, df, trade_date)
@@ -160,13 +184,14 @@ class MarketSnapshotService:
             # Log success
             self._log_fetch_complete(trade_date, "success", record_count, duration)
             
-            logger.info(f"[MarketSnapshot] Fetched {record_count} stocks in {duration:.1f}s")
+            logger.info(f"[MarketSnapshot] Fetched {record_count} stocks from {data_source} in {duration:.1f}s")
             
             return {
                 "success": True,
                 "trade_date": trade_date,
                 "total_stocks": record_count,
                 "duration_seconds": duration,
+                "source": data_source,
             }
             
         except Exception as e:
@@ -175,6 +200,45 @@ class MarketSnapshotService:
             return {"success": False, "error": str(e), "trade_date": trade_date}
         finally:
             self._is_fetching = False
+    
+    def _fetch_from_tushare(self, trade_date: str) -> Any:
+        """Fetch data from Tushare.
+        
+        Args:
+            trade_date: Trade date in YYYY-MM-DD format
+        """
+        try:
+            from tradingagents.dataflows.plugins.builtin.tushare_source import TushareDataSource
+            
+            logger.info(f"[MarketSnapshot] Fetching from Tushare for {trade_date}...")
+            
+            source = TushareDataSource()
+            if not source.initialize():
+                raise RuntimeError("Failed to initialize Tushare")
+            
+            records = source.get_daily_basic(trade_date)
+            
+            if not records:
+                raise ValueError("No data returned from Tushare")
+            
+            # Convert to DataFrame
+            df = pd.DataFrame(records)
+            
+            # Add missing columns with defaults
+            df['change_amount'] = 0  # Tushare doesn't provide this directly
+            df['amplitude'] = 0
+            df['high'] = 0
+            df['low'] = 0
+            df['open_price'] = 0
+            df['pre_close'] = 0
+            df['volume_ratio'] = 0
+            
+            logger.info(f"[MarketSnapshot] Tushare returned {len(df)} stocks")
+            return df
+            
+        except Exception as e:
+            logger.error(f"[MarketSnapshot] Tushare fetch failed: {e}")
+            raise
     
     def _fetch_from_akshare(self) -> Any:
         """Fetch data from AkShare."""
@@ -218,6 +282,7 @@ class MarketSnapshotService:
                 if col in df.columns:
                     df[col] = pd.to_numeric(df[col], errors='coerce')
             
+            logger.info(f"[MarketSnapshot] AkShare returned {len(df)} stocks")
             return df
             
         except Exception as e:
