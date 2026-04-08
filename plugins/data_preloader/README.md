@@ -1,6 +1,6 @@
 # Data Preloader Plugin
 
-数据源插件系统，支持多种数据源：AkShare 实时、按需智能缓存、全量预加载、XBX 本地数据等。
+数据源插件系统，支持多种数据源：AkShare 实时、按需智能缓存、全量预加载等。
 
 ## 数据源对比
 
@@ -9,7 +9,6 @@
 | `akshare` | 实时获取 | 无缓存 | 开发测试、数据量小 | 无 |
 | `smart_cache` | **按需加载** | LRU淘汰、分层TTL | **生产环境推荐** | 可控（默认500MB） |
 | `preloaded` | 定时全量 | 全市场缓存 | 高性能分析场景 | 较大（1-2GB） |
-| `xbx` | 本地文件 | 依赖外部数据 | 已有XBX数据的用户 | 取决于XBX数据 |
 
 ## 推荐使用：Smart Cache（按需加载）
 
@@ -197,13 +196,7 @@ export TA_CACHE_MAX_SIZE_MB=2000
 export TA_CACHE_MAX_DAYS_PER_SYMBOL=252  # 一年数据
 ```
 
-### 场景3: 已有 XBX 本地数据
-```bash
-export TA_DATA_SOURCE=xbx
-export TA_XBX_DATA_PATH=E:\STOCKDATA
-```
-
-### 场景4: 开发测试
+### 场景3: 开发测试
 ```bash
 export TA_DATA_SOURCE=akshare  # 不缓存，每次实时获取
 ```
@@ -273,5 +266,5 @@ curl http://localhost:8000/v1/data/status
 
 1. **首次访问较慢**: 冷启动时需要从 AkShare 获取数据
 2. **SQLite 并发**: 单进程/线程访问，多进程部署需要每个进程独立缓存
-3. **XBX 需要自行实现**: XbxDataSource 是模板，需要根据实际数据格式实现
+3. **自定义数据源**: 可通过插件机制添加自定义数据源
 4. **TTL 过期后自动刷新**: 过期数据会自动重新获取，无需手动干预
