@@ -2,10 +2,12 @@
 
 from .akshare_source import AkshareDataSource
 from .preloaded_source import PreloadedDataSource
+from .smart_cache_source import SmartCacheDataSource
 from .xbx_source import XbxDataSource
 
 __all__ = [
     "AkshareDataSource",
-    "PreloadedDataSource", 
+    "PreloadedDataSource",
+    "SmartCacheDataSource",
     "XbxDataSource",
 ]

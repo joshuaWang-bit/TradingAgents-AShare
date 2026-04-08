@@ -11,18 +11,21 @@ logger = logging.getLogger(__name__)
 
 def register_builtin_plugins() -> None:
     """Register all built-in data source plugins."""
-    from .builtin import AkshareDataSource, PreloadedDataSource, XbxDataSource
+    from .builtin import AkshareDataSource, PreloadedDataSource, SmartCacheDataSource, XbxDataSource
     
     # Register AkShare as default
     DataSourceRegistry.register("akshare", AkshareDataSource, set_default=True)
     
-    # Register preloaded source
+    # Register preloaded source (full market preload)
     DataSourceRegistry.register("preloaded", PreloadedDataSource)
+    
+    # Register smart cache source (on-demand with LRU eviction)
+    DataSourceRegistry.register("smart_cache", SmartCacheDataSource)
     
     # Register XBX source (template)
     DataSourceRegistry.register("xbx", XbxDataSource)
     
-    logger.info("[PluginLoader] Registered built-in plugins: akshare, preloaded, xbx")
+    logger.info("[PluginLoader] Registered built-in plugins: akshare, preloaded, smart_cache, xbx")
 
 
 def load_custom_plugins(plugin_paths: List[str] = None) -> None:

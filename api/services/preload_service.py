@@ -2,13 +2,16 @@
 
 This service manages the daily preloading of stock data from AkShare
 to local SQLite cache. It can be run as a scheduled task or triggered manually.
+
+Note: This service is primarily for 'preloaded' data source. 
+For 'smart_cache', data is loaded on-demand.
 """
 
 import asyncio
 import logging
 import os
 from datetime import datetime, timezone
-from typing import Dict, List, Optional, Set
+from typing import Dict, List, Optional, Set, Any
 
 from sqlalchemy.orm import Session
 
@@ -30,13 +33,27 @@ class DataPreloadService:
         """Check if a preload operation is currently running."""
         return self._is_running
     
-    def get_status(self) -> Dict:
+    def get_status(self) -> Dict[str, Any]:
         """Get current preload status."""
-        from tradingagents.dataflows.interface import get_preload_status
+        # Check if using smart_cache
+        from tradingagents.dataflows.plugins.registry import get_data_source
+        data_source = get_data_source()
         
+        if data_source and data_source.name == "smart_cache":
+            # Get smart cache statistics
+            return {
+                "is_running": self._is_running,
+                "current_operation": self._current_operation,
+                "data_source": "smart_cache",
+                **data_source.get_cache_statistics()
+            }
+        
+        # For preloaded source
+        from tradingagents.dataflows.interface import get_preload_status
         status = get_preload_status()
         status["is_running"] = self._is_running
         status["current_operation"] = self._current_operation
+        status["data_source"] = data_source.name if data_source else "unknown"
         return status
     
     async def run_preload(
