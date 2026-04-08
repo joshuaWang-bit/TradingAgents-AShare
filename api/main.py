@@ -113,7 +113,10 @@ _scheduled_analysis_max_concurrency = int(os.getenv("TA_SCHEDULED_ANALYSIS_MAX_C
 _scheduled_analysis_semaphore: Optional[asyncio.Semaphore] = None
 _scheduled_analysis_queue_lock: Optional[asyncio.Lock] = None
 _scheduled_analysis_waiting_job_ids: list[str] = []
-_scheduled_analysis_running_job_ids: set[str] = set()
+_scheduled_analysis_running_job_ids: set[str] = []
+
+# Market snapshot background task
+_market_snapshot_task: Optional[asyncio.Task] = None
 
 
 def _ensure_scheduled_analysis_queue() -> tuple[asyncio.Semaphore, asyncio.Lock]:
@@ -256,6 +259,57 @@ async def _scheduler_loop():
 
         except Exception as e:
             logger.error(f"[Scheduler] Error: {e}")
+
+
+async def _market_snapshot_loop():
+    """Background loop: fetch daily market snapshot after market close (15:35).
+    
+    Fetches all A-share stock quotes using ak.stock_zh_a_spot_em() and caches
+    them locally for fast market scanning and filtering.
+    """
+    from tradingagents.dataflows.trade_calendar import is_cn_trading_day
+    from zoneinfo import ZoneInfo
+    from api.services.market_snapshot_service import get_snapshot_service
+    
+    fetch_time = os.getenv("TA_MARKET_SNAPSHOT_TIME", "15:35")
+    try:
+        fetch_hour, fetch_minute = map(int, fetch_time.split(":"))
+    except ValueError:
+        fetch_hour, fetch_minute = 15, 35
+    
+    _log(f"[MarketSnapshot] Started. Daily fetch at {fetch_hour:02d}:{fetch_minute:02d}")
+    
+    while True:
+        await asyncio.sleep(60)  # Check every minute
+        
+        try:
+            now = datetime.now(tz=ZoneInfo("Asia/Shanghai"))
+            today = now.strftime("%Y-%m-%d")
+            
+            # Check if trading day
+            if not is_cn_trading_day(today):
+                continue
+            
+            # Check if it's time to fetch
+            if now.hour != fetch_hour or now.minute != fetch_minute:
+                continue
+            
+            # Check if auto-fetch is enabled
+            if os.getenv("TA_MARKET_SNAPSHOT_AUTO", "true").lower() != "true":
+                continue
+            
+            # Fetch snapshot
+            service = get_snapshot_service()
+            result = await service.fetch_and_cache_daily_snapshot(today)
+            
+            if result.get("success"):
+                _log(f"[MarketSnapshot] Fetched {result.get('total_stocks', 0)} stocks "
+                     f"in {result.get('duration_seconds', 0):.1f}s")
+            else:
+                _log(f"[MarketSnapshot] Failed: {result.get('error', 'Unknown error')}")
+                
+        except Exception as e:
+            logger.error(f"[MarketSnapshot] Error: {e}")
 
 
 def _resolve_scheduled_trade_date(trade_date: str) -> str:
@@ -411,7 +465,7 @@ async def _run_scheduled_job(task: dict, trade_date: str):
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Initialize resources on startup and cleanup on shutdown."""
-    global _scheduler_task, _scheduled_analysis_semaphore, _scheduled_analysis_queue_lock
+    global _scheduler_task, _market_snapshot_task, _scheduled_analysis_semaphore, _scheduled_analysis_queue_lock
     init_db()
     _log("Database initialized.")
     with _jobs_lock:
@@ -481,10 +535,13 @@ async def lifespan(app: FastAPI):
     await asyncio.to_thread(_load_cn_stock_map)
     _log("Stock map pre-loaded on startup.")
     _scheduler_task = asyncio.create_task(_scheduler_loop())
+    _market_snapshot_task = asyncio.create_task(_market_snapshot_loop())
     yield
     _log("Shutting down: Cleaning up resources...")
     if _scheduler_task:
         _scheduler_task.cancel()
+    if _market_snapshot_task:
+        _market_snapshot_task.cancel()
     _executor.shutdown(wait=True)
     _log("Executor shutdown complete.")
 
@@ -4719,6 +4776,111 @@ async def get_data_source_info_endpoint():
     return DataSourceInfoResponse(
         current_source=info.get("current_source"),
         available_sources=info.get("available_sources", []),
+    )
+
+
+# ─── Market Snapshot API ─────────────────────────────────────────────────────
+
+class MarketSnapshotResponse(BaseModel):
+    trade_date: str
+    total_stocks: int
+    stocks: List[Dict[str, Any]]
+
+
+class MarketSnapshotTriggerResponse(BaseModel):
+    success: bool
+    message: str
+    trade_date: Optional[str]
+    total_stocks: int
+    duration_seconds: float
+
+
+class MarketSnapshotStatsResponse(BaseModel):
+    latest_snapshot: Optional[Dict[str, Any]]
+    total_snapshots: int
+    db_path: str
+
+
+@app.get("/v1/market/snapshot", response_model=MarketSnapshotResponse)
+async def get_market_snapshot(
+    trade_date: Optional[str] = None,
+    min_change: Optional[float] = None,
+    max_change: Optional[float] = None,
+    sort_by: str = "change_pct",
+    limit: int = 100,
+):
+    """Get daily market snapshot (cached after market close).
+    
+    Query Parameters:
+    - trade_date: Date (YYYY-MM-DD), defaults to latest
+    - min_change: Minimum change percentage filter
+    - max_change: Maximum change percentage filter
+    - sort_by: Sort column (change_pct, amount, volume, turnover_rate)
+    - limit: Max results (default 100)
+    """
+    from api.services.market_snapshot_service import get_snapshot_service
+    
+    service = get_snapshot_service()
+    stocks = service.get_snapshot(
+        trade_date=trade_date,
+        min_change_pct=min_change,
+        max_change_pct=max_change,
+        sort_by=sort_by,
+        limit=limit,
+    )
+    
+    # Get trade date from first result if not specified
+    if stocks and not trade_date:
+        trade_date = stocks[0].get("trade_date", "")
+    
+    return MarketSnapshotResponse(
+        trade_date=trade_date or "",
+        total_stocks=len(stocks),
+        stocks=stocks,
+    )
+
+
+@app.post("/v1/market/snapshot/fetch", response_model=MarketSnapshotTriggerResponse)
+async def trigger_market_snapshot_fetch(
+    trade_date: Optional[str] = None,
+    current_user: UserDB = Depends(get_current_user),
+):
+    """Manually trigger market snapshot fetch (admin only)."""
+    from api.services.market_snapshot_service import get_snapshot_service
+    
+    service = get_snapshot_service()
+    result = await service.fetch_and_cache_daily_snapshot(trade_date)
+    
+    if result.get("success"):
+        return MarketSnapshotTriggerResponse(
+            success=True,
+            message="Market snapshot fetched successfully",
+            trade_date=result.get("trade_date"),
+            total_stocks=result.get("total_stocks", 0),
+            duration_seconds=result.get("duration_seconds", 0),
+        )
+    else:
+        return MarketSnapshotTriggerResponse(
+            success=False,
+            message=result.get("error", "Unknown error"),
+            trade_date=result.get("trade_date"),
+            total_stocks=0,
+            duration_seconds=0,
+        )
+
+
+@app.get("/v1/market/snapshot/stats", response_model=MarketSnapshotStatsResponse)
+async def get_market_snapshot_stats():
+    """Get market snapshot statistics."""
+    from api.services.market_snapshot_service import get_snapshot_service
+    
+    service = get_snapshot_service()
+    stats = service.get_statistics()
+    
+    return MarketSnapshotStatsResponse(
+        latest_snapshot=stats.get("latest_snapshot"),
+        total_snapshots=stats.get("total_snapshots", 0),
+        db_path=stats.get("db_path", ""),
     )
 
 
