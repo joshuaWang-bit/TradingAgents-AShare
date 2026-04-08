@@ -3,7 +3,7 @@
 This module provides a plugin architecture for supporting multiple data sources:
 - akshare: Default real-time data from AkShare API
 - preloaded: Daily pre-loaded data from AkShare to local SQLite
-- xbx: Local data from XBX database (E:\STOCKDATA or similar)
+- xbx: Local data from XBX database (E:/STOCKDATA or similar)
 - Custom user plugins
 
 Usage:

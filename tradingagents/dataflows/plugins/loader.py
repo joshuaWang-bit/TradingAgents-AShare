@@ -2,7 +2,8 @@
 
 import logging
 import os
-from typing import List
+from pathlib import Path
+from typing import List, Optional
 
 from .registry import DataSourceRegistry
 

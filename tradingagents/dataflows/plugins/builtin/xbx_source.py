@@ -1,18 +1,18 @@
-"""XBX data source - reads from local XBX database (e.g., E:\STOCKDATA).
+"""XBX data source - reads from local XBX database (e.g., E:/STOCKDATA).
 
 This is a template/placeholder for the XBX data source plugin.
 Users can implement their own version based on their XBX database schema.
 
 Expected directory structure:
-    E:\STOCKDATA\
-        ├── daily\         # Daily price data (CSV or DBF)
-        ├── min\           # Minute data
-        ├── factor\        # Factor data
-        └── info\          # Stock info
+    E:/STOCKDATA/
+        ├── daily/         # Daily price data (CSV or DBF)
+        ├── min/           # Minute data
+        ├── factor/        # Factor data
+        └── info/          # Stock info
 
 Usage:
-    Set environment variable: TA_XBX_DATA_PATH=E:\STOCKDATA
-    Or configure: config = {"data_path": "E:\\STOCKDATA"}
+    Set environment variable: TA_XBX_DATA_PATH=E:/STOCKDATA
+    Or configure: config = {"data_path": "E:/STOCKDATA"}
 """
 
 import logging
